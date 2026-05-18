@@ -1,0 +1,16 @@
+import { defineConfig } from 'vitest/config';
+
+export default defineConfig({
+  test: {
+    globals: false,
+    environmentMatchGlobs: [
+      ['packages/web/src/**', 'jsdom'],
+      ['**/*', 'node'],
+    ],
+    include: ['packages/*/src/**/*.test.ts', 'packages/*/src/**/*.test.tsx'],
+    coverage: {
+      reporter: ['text', 'lcov'],
+      exclude: ['**/dist/**', '**/*.config.*', '**/index.ts'],
+    },
+  },
+});

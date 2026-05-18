@@ -1,0 +1,26 @@
+import { randomBytes } from 'node:crypto';
+
+export type SessionId = string & { readonly __brand: 'SessionId' };
+export type TicketId = string & { readonly __brand: 'TicketId' };
+export type QuestionId = string & { readonly __brand: 'QuestionId' };
+export type ParticipantId = string & { readonly __brand: 'ParticipantId' };
+
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-';
+
+function mint(prefix: string, len = 16): string {
+  const bytes = randomBytes(len);
+  let out = '';
+  for (let i = 0; i < len; i++) out += ALPHABET[bytes[i]! % ALPHABET.length];
+  return `${prefix}${out}`;
+}
+
+export const newSessionId = (): SessionId => mint('sb_s_') as SessionId;
+export const newTicketId = (): TicketId => mint('sb_t_') as TicketId;
+export const newQuestionId = (): QuestionId => mint('sb_q_') as QuestionId;
+export const newParticipantId = (): ParticipantId => mint('sb_p_') as ParticipantId;
+
+export function newJoinCode(): string {
+  // 6-digit numeric, leading zero allowed
+  const n = randomBytes(4).readUInt32BE(0) % 1_000_000;
+  return n.toString().padStart(6, '0');
+}

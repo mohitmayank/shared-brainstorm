@@ -1,0 +1,17 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.local
+.DS_Store
+*.log
+*.pid
+.vite/
+packages/*/dist/
+packages/server/dist/public/
+~/.shared-brainstorm/  # never write here from repo
+.superhuman/
+.claude/settings.local.json
+*.tsbuildinfo
+docs
+tasks

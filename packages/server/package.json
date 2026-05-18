@@ -1,0 +1,35 @@
+{
+  "name": "shared-brainstorm",
+  "version": "0.1.0-alpha.0",
+  "private": false,
+  "license": "AGPL-3.0-or-later",
+  "author": "Mohit Jain",
+  "homepage": "https://github.com/mohitmayank/shared-brainstorm",
+  "repository": { "type": "git", "url": "git+https://github.com/mohitmayank/shared-brainstorm.git" },
+  "type": "module",
+  "bin": { "shared-brainstorm": "./bin/shared-brainstorm.js" },
+  "main": "./dist/cli.js",
+  "files": ["dist", "bin", "skills"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepack": "node scripts/prepack.mjs",
+    "release": "release-it"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@shared-brainstorm/shared": "*",
+    "hono": "^4.6.0",
+    "@hono/node-server": "^1.13.0",
+    "@hono/node-ws": "^1.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.0",
+    "supertest": "^7.0.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0"
+  }
+}

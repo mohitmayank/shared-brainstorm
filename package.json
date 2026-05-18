@@ -1,0 +1,35 @@
+{
+  "name": "shared-brainstorm-monorepo",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "author": "Mohit Jain",
+  "homepage": "https://github.com/mohitmayank/shared-brainstorm",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -ws --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "ESLINT_USE_FLAT_CONFIG=false eslint packages --ext .ts,.tsx",
+    "format": "prettier --write \"packages/**/*.{ts,tsx,json,md}\" \"*.{json,md}\"",
+    "typecheck": "tsc -b packages/shared packages/server packages/web",
+    "release": "npm --workspace=packages/server run release"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "jsdom": "^29.1.0",
+    "prettier": "^3.3.0",
+    "release-it": "^20.0.1",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

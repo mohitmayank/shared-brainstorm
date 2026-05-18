@@ -15,3 +15,10 @@ packages/server/dist/public/
 *.tsbuildinfo
 docs
 tasks
+
+# Build artifacts copied into packages/server/ by scripts/prepack.mjs.
+# These are reassembled on every `npm publish`; tracking them in git would
+# produce churn and confusing diffs.
+packages/server/skills/
+packages/server/README.md
+packages/server/LICENSE

@@ -1,7 +1,7 @@
 // packages/server/scripts/prepack.mjs
 // Cross-platform copy script: assembles dist/public + skills before npm pack.
 // Run via: node scripts/prepack.mjs
-import { cp, stat, rm, mkdir } from 'node:fs/promises';
+import { cp, stat, rm, mkdir, copyFile } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -52,6 +52,19 @@ async function main() {
   process.stdout.write(`Copying ${skillsSrc} → ${skillsDest}\n`);
   if (await exists(skillsDest)) await rm(skillsDest, { recursive: true });
   await cp(skillsSrc, skillsDest, { recursive: true });
+
+  // Copy root README + LICENSE into the package so npm includes them.
+  // Without this, the published package on npm has no readme / license file.
+  for (const name of ['README.md', 'LICENSE']) {
+    const src = resolve(repoRoot, name);
+    const dest = resolve(serverRoot, name);
+    if (!(await exists(src))) {
+      process.stderr.write(`ERROR: ${name} not found at ${src}\n`);
+      process.exit(1);
+    }
+    process.stdout.write(`Copying ${src} → ${dest}\n`);
+    await copyFile(src, dest);
+  }
 
   process.stdout.write('prepack done.\n');
 }

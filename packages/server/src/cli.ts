@@ -2,6 +2,7 @@ import { realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { mcpState } from './mcp/state.js';
+import { isTruthyEnv } from './util/env.js';
 
 const requirePkg = createRequire(import.meta.url);
 const pkg = requirePkg('../package.json') as { version: string };
@@ -92,6 +93,12 @@ Hosts: ${KNOWN_HOSTS.join(', ')}`,
     }
     case 'mcp':
       installSignalHandlers();
+      if (isTruthyEnv(process.env['SHARED_BRAINSTORM_NO_REDACT'])) {
+        process.stderr.write(
+          '⚠  Redaction DISABLED — question text sent verbatim to participants. ' +
+            'SHARED_BRAINSTORM_NO_REDACT=1 is set.\n',
+        );
+      }
       {
         const { runMcpStdio } = await import('./mcp/server.js');
         await runMcpStdio();

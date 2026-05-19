@@ -84,3 +84,81 @@ describe('main --version output', () => {
     15_000,
   );
 });
+
+describe('main --mcp banner', () => {
+  it(
+    'emits banner on stderr when SHARED_BRAINSTORM_NO_REDACT=1',
+    async () => {
+      const child = spawn('npx', ['tsx', cliSourcePath, '--mcp'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, SHARED_BRAINSTORM_NO_REDACT: '1' },
+      });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+      child.kill('SIGTERM');
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => resolve(), 5000);
+        child.on('close', () => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+      expect(stderr).toContain('Redaction DISABLED');
+      expect(stderr).toContain('SHARED_BRAINSTORM_NO_REDACT=1');
+      expect(stdout).not.toContain('Redaction DISABLED');
+    },
+    30_000,
+  );
+
+  it(
+    'does NOT emit banner when env var is unset',
+    async () => {
+      const env = { ...process.env };
+      delete env['SHARED_BRAINSTORM_NO_REDACT'];
+      const child = spawn('npx', ['tsx', cliSourcePath, '--mcp'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env,
+      });
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+      child.kill('SIGTERM');
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => resolve(), 5000);
+        child.on('close', () => {
+          clearTimeout(t);
+          resolve();
+        });
+      });
+      expect(stderr).not.toContain('Redaction DISABLED');
+    },
+    30_000,
+  );
+
+  it(
+    'does NOT emit banner in install mode',
+    async () => {
+      const tmpHome = resolve(here, '..', '..', '..', 'node_modules', '.tmp-test-home');
+      const child = spawn('npx', ['tsx', cliSourcePath, '--install', 'claude-code'], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, SHARED_BRAINSTORM_NO_REDACT: '1', HOME: tmpHome },
+      });
+      let stderr = '';
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      await new Promise<void>((resolve) => child.on('close', () => resolve()));
+      expect(stderr).not.toContain('Redaction DISABLED');
+    },
+    15_000,
+  );
+});

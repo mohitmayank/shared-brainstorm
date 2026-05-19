@@ -90,19 +90,68 @@ describe('reduce — session_ended', () => {
   });
 });
 
-describe('reduce — tunnel_url_changed', () => {
+describe('reduce — tunnel_url_changed (REL-05 / D-20)', () => {
+  // 02-07 locked the shape to `tunnelBanner: { url } | null` — no dismissed
+  // field on the reducer. Dismiss-ack lives in `App.tsx` `useState` so the
+  // banner reappears for a *new* URL even after the previous URL was
+  // dismissed (Pitfall 3). Reducer tests assert only the latest-URL tracking;
+  // dismiss-reappear semantics are covered by the Playwright spec.
   const baseState = reduce(initialState, welcomeEphemeral);
 
-  it('sets banner on tunnel_url_changed', () => {
-    const evt: AnyFrame = {
-      seq: 11,
-      ts: '2026-01-01T00:00:11Z',
-      type: 'tunnel_url_changed',
-      payload: { public_url: 'https://example.trycloudflare.com' },
-    };
-    const next = reduce(baseState, evt);
-    expect(next.banner).toContain('example.trycloudflare.com');
+  const evtA: AnyFrame = {
+    seq: 11,
+    ts: '2026-01-01T00:00:11Z',
+    type: 'tunnel_url_changed',
+    payload: { public_url: 'https://A.example' },
+  };
+
+  it('sets tunnelBanner to the announced URL on first tunnel_url_changed', () => {
+    const next = reduce(baseState, evtA);
+    expect(next.tunnelBanner).toEqual({ url: 'https://A.example' });
     expect(next.lastSeq).toBe(11);
+    // The dedicated tunnelBanner channel must not leak into the generic
+    // `banner` field — the latter is reserved for session_ended UX.
+    expect(next.banner).toBeNull();
+  });
+
+  it('updates tunnelBanner.url idempotently when the same URL is re-emitted', () => {
+    const after1 = reduce(baseState, evtA);
+    const evtASecond: AnyFrame = {
+      seq: 12,
+      ts: '2026-01-01T00:00:12Z',
+      type: 'tunnel_url_changed',
+      payload: { public_url: 'https://A.example' },
+    };
+    const after2 = reduce(after1, evtASecond);
+    expect(after2.tunnelBanner).toEqual({ url: 'https://A.example' });
+    expect(after2.lastSeq).toBe(12);
+  });
+
+  it('replaces tunnelBanner.url when a different URL is emitted', () => {
+    const after1 = reduce(baseState, evtA);
+    const evtB: AnyFrame = {
+      seq: 13,
+      ts: '2026-01-01T00:00:13Z',
+      type: 'tunnel_url_changed',
+      payload: { public_url: 'https://B.example' },
+    };
+    const after2 = reduce(after1, evtB);
+    expect(after2.tunnelBanner).toEqual({ url: 'https://B.example' });
+    expect(after2.lastSeq).toBe(13);
+  });
+
+  it('preserves tunnelBanner across a subsequent welcome (session-scoped, not bootstrap-cleared)', () => {
+    // Late-joiner replay scenario: a `tunnel_url_changed` lands first, then
+    // an ephemeral `welcome` arrives. The welcome must NOT wipe the banner
+    // because the URL change is still operationally relevant.
+    const afterChange = reduce(baseState, evtA);
+    expect(afterChange.tunnelBanner).not.toBeNull();
+    const afterWelcome = reduce(afterChange, welcomeEphemeral);
+    expect(afterWelcome.tunnelBanner).toEqual({ url: 'https://A.example' });
+  });
+
+  it('initialState.tunnelBanner is null', () => {
+    expect(initialState.tunnelBanner).toBeNull();
   });
 });
 

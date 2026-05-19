@@ -113,6 +113,76 @@ button:disabled { opacity: .5; cursor: default; }
   margin-bottom: 1rem;
 }
 
+.tunnel-banner {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: .6rem .9rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: .9rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.tunnel-banner-text { color: var(--text); }
+.tunnel-banner-url {
+  background: var(--surface-3);
+  padding: .1rem .35rem;
+  border-radius: 3px;
+  font-size: .85rem;
+  word-break: break-all;
+}
+.tunnel-banner-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  margin-left: auto;
+}
+.tunnel-banner-copy {
+  padding: .25rem .65rem;
+  font-size: .8rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.tunnel-banner-copy:hover { background: var(--surface-3); }
+.tunnel-banner-copied {
+  font-size: .8rem;
+  color: var(--text-muted);
+}
+.tunnel-banner-dismiss {
+  padding: .15rem .5rem;
+  font-size: 1rem;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+.tunnel-banner-dismiss:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.reconnect-prompt {
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  color: var(--text-muted);
+  padding: .5rem .75rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: .85rem;
+}
+.reconnect-prompt-try {
+  padding: .15rem .55rem;
+  font-size: .8rem;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  margin-left: .25rem;
+}
+.reconnect-prompt-try:hover { background: var(--surface-3); }
+
 .row { display: flex; gap: .5rem; align-items: flex-end; }
 .row input, .row textarea { flex: 1; }
 

@@ -37,6 +37,14 @@ export interface UiState {
    * only on `initialState` — the renderer (02-07) decides UX.
    */
   transportFailed: TransportFailedState | null;
+  /**
+   * Tracks the most-recent tunnel URL announced via `tunnel_url_changed`
+   * (REL-05 / D-20). Reducer stays pure server-event-driven: it records the
+   * latest URL only. Dismiss-ack state lives in `App.tsx` `useState` so
+   * Pitfall 3 (banner reappears on a new URL even after dismiss) is enforced
+   * by comparing the dismissed URL against `tunnelBanner.url` at render time.
+   */
+  tunnelBanner: { url: string } | null;
 }
 
 export const initialState: UiState = {
@@ -45,6 +53,7 @@ export const initialState: UiState = {
   lastSeq: -1,
   banner: null,
   transportFailed: null,
+  tunnelBanner: null,
 };
 
 function isServerEvent(frame: AnyFrame): frame is ServerEvent {
@@ -224,11 +233,14 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
   }
 
   if (type === 'tunnel_url_changed') {
+    // REL-05 / D-20: drive the dedicated TunnelBanner via `tunnelBanner`,
+    // not the generic `banner` field. The dismiss-ack lives in `App.tsx`
+    // `useState` (Pitfall 3); the reducer only records the latest URL.
     const p = payload<{ public_url: string }>(evt);
     return {
       ...state,
       lastSeq: seq,
-      banner: `Tunnel URL changed: ${p.public_url}`,
+      tunnelBanner: { url: p.public_url },
     };
   }
 

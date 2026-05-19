@@ -19,7 +19,7 @@
     "test:e2e": "playwright test --config=e2e/playwright.config.ts",
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint packages --ext .ts,.tsx",
     "format": "prettier --write \"packages/**/*.{ts,tsx,json,md}\" \"*.{json,md}\"",
-    "typecheck": "tsc -b packages/shared packages/server packages/web",
+    "typecheck": "tsc -b packages/shared packages/server packages/web && tsc --noEmit -p e2e/tsconfig.json",
     "release": "npm --workspace=packages/server run release"
   },
   "devDependencies": {

@@ -7,12 +7,27 @@ import {
   recordAnswer,
   stopSession,
 } from './tools.js';
+import type { Transport, TransportErrorReason } from '../transport/Transport.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'sb-mcp-'));
+}
+
+/**
+ * MockTransport in tools.ts is module-private but exposes `_getOnErrorCb()` for
+ * tests. We narrow the transport reference via this structural shape so the
+ * test does not require exporting the class.
+ */
+interface MockTransportAccessors extends Transport {
+  _getOnErrorCb(): ((reason: TransportErrorReason) => void) | null;
+}
+
+function asMockTransport(t: Transport | null): MockTransportAccessors {
+  if (!t) throw new Error('mcpState.transport is null');
+  return t as MockTransportAccessors;
 }
 
 beforeEach(async () => {
@@ -41,6 +56,8 @@ beforeEach(async () => {
   mcpState.transport = null;
   mcpState.http = null;
   mcpState.publicUrl = null;
+  mcpState.transportFailed = false;
+  mcpState.lastTransportError = null;
 });
 
 describe('startSession', () => {
@@ -317,7 +334,145 @@ describe('stopSession', () => {
       expect(mcpState.transport).toBeNull();
       expect(mcpState.http).toBeNull();
       expect(mcpState.publicUrl).toBeNull();
+      expect(mcpState.transportFailed).toBe(false);
+      expect(mcpState.lastTransportError).toBeNull();
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('transport_failed (REL-03 wiring)', () => {
+  it('startSession initialises mcpState.transportFailed=false and lastTransportError=null', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession(
+        { brief: 'transport-failed init' },
+        { transportFactory: 'mock', transcriptDir: dir },
+      );
+      expect(mcpState.transportFailed).toBe(false);
+      expect(mcpState.lastTransportError).toBeNull();
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('invoking onError sets mcpState flag + last-error snapshot and broadcasts a ring-buffered transport_failed event', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession(
+        { brief: 'transport-failed fire' },
+        { transportFactory: 'mock', transcriptDir: dir },
+      );
+
+      const cb = asMockTransport(mcpState.transport)._getOnErrorCb();
+      expect(cb).not.toBeNull();
+
+      const reason: TransportErrorReason = {
+        code: 'cloudflared_permanent_failure',
+        message: 'simulated permanent failure',
+        restart_count: 3,
+      };
+      cb!(reason);
+
+      expect(mcpState.transportFailed).toBe(true);
+      expect(mcpState.lastTransportError).not.toBeNull();
+      expect(mcpState.lastTransportError?.code).toBe(reason.code);
+      expect(mcpState.lastTransportError?.message).toBe(reason.message);
+      expect(mcpState.lastTransportError?.restart_count).toBe(reason.restart_count);
+      // `at` is an ISO timestamp set at fire-time; just sanity check it parses.
+      expect(mcpState.lastTransportError?.at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(Number.isNaN(Date.parse(mcpState.lastTransportError!.at))).toBe(false);
+
+      // Ring-buffered: replay(-1) returns all events since (and including) seq 0.
+      // The transport_failed event should be present.
+      const events = mcpState.manager!.replay(-1);
+      const failedEvents = events.filter((e) => e.type === 'transport_failed');
+      expect(failedEvents).toHaveLength(1);
+      // The generic Envelope<P> helper in packages/shared/src/events.ts erases
+      // the literal type discriminator at d.ts generation, so TS cannot narrow
+      // `evt.payload` from `evt.type === 'transport_failed'` alone. Cast the
+      // payload through `unknown` once we have already filtered by type.
+      const evt = failedEvents[0]!;
+      const payload = evt.payload as unknown as {
+        code: string;
+        message: string;
+        restart_count: number;
+        at: string;
+      };
+      expect(evt.type).toBe('transport_failed');
+      expect(payload.code).toBe(reason.code);
+      expect(payload.message).toBe(reason.message);
+      expect(payload.restart_count).toBe(reason.restart_count);
+      expect(payload.at).toBe(mcpState.lastTransportError!.at);
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('askGroup throws a transport_failed error after onError has fired', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession(
+        { brief: 'transport-failed gate' },
+        { transportFactory: 'mock', transcriptDir: dir },
+      );
+
+      const cb = asMockTransport(mcpState.transport)._getOnErrorCb();
+      cb!({
+        code: 'cloudflared_permanent_failure',
+        message: 'simulated permanent failure',
+        restart_count: 3,
+      });
+
+      expect(() => askGroup({ question: 'will this go through?' })).toThrow(
+        /transport_failed/,
+      );
+      // Error message should also surface code and restart_count for debuggability.
+      expect(() => askGroup({ question: 'will this go through?' })).toThrow(
+        /cloudflared_permanent_failure/,
+      );
+      expect(() => askGroup({ question: 'will this go through?' })).toThrow(/restart_count=3/);
+      // And the gate must NOT have created a question — manager state is untouched.
+      expect(mcpState.manager!.currentQuestion()).toBeNull();
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('stopSession resets transport-failure state; subsequent startSession starts clean', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession(
+        { brief: 'first session — will fail' },
+        { transportFactory: 'mock', transcriptDir: dir },
+      );
+      const cb = asMockTransport(mcpState.transport)._getOnErrorCb();
+      cb!({
+        code: 'cloudflared_permanent_failure',
+        message: 'simulated permanent failure',
+        restart_count: 3,
+      });
+      expect(mcpState.transportFailed).toBe(true);
+
+      await stopSession();
+      expect(mcpState.transportFailed).toBe(false);
+      expect(mcpState.lastTransportError).toBeNull();
+
+      // New session must start with the flag cleared and askGroup must work.
+      await startSession(
+        { brief: 'second session — fresh' },
+        { transportFactory: 'mock', transcriptDir: dir },
+      );
+      expect(mcpState.transportFailed).toBe(false);
+      expect(mcpState.lastTransportError).toBeNull();
+      const result = askGroup({ question: 'fresh question?' });
+      expect(result.ticket_id).toMatch(/^sb_t_/);
+    } finally {
+      await stopSession().catch(() => null);
       rmSync(dir, { recursive: true, force: true });
     }
   });

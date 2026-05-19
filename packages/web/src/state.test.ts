@@ -106,6 +106,85 @@ describe('reduce — tunnel_url_changed', () => {
   });
 });
 
+describe('reduce — transport_failed (REL-03)', () => {
+  const baseState = reduce(initialState, welcomeEphemeral);
+
+  // Cast through `unknown` because the generic `Envelope<P>` helper in
+  // packages/shared/src/events.ts erases the literal `type` discriminator at
+  // declaration-generation time (z.ZodLiteral<string> instead of
+  // z.ZodLiteral<'transport_failed'>), so structural assignment to AnyFrame
+  // fails excess-property check despite the variant existing in the schema.
+  // The reducer itself narrows correctly via the `type === 'transport_failed'`
+  // string check and the payload<T>() helper.
+  const transportFailedEvt: AnyFrame = {
+    seq: 12,
+    ts: '2026-05-19T12:00:00.000Z',
+    type: 'transport_failed',
+    payload: {
+      code: 'cloudflared_permanent_failure',
+      message: 'tunnel exited after 3 restart attempts',
+      restart_count: 3,
+      at: '2026-05-19T12:00:00.000Z',
+    },
+  } as unknown as AnyFrame;
+
+  it('initialState.transportFailed is null', () => {
+    expect(initialState.transportFailed).toBeNull();
+  });
+
+  it('sets transportFailed to the parsed payload on transport_failed', () => {
+    const next = reduce(baseState, transportFailedEvt);
+    expect(next.transportFailed).not.toBeNull();
+    expect(next.transportFailed?.code).toBe('cloudflared_permanent_failure');
+    expect(next.transportFailed?.message).toBe('tunnel exited after 3 restart attempts');
+    expect(next.transportFailed?.restart_count).toBe(3);
+    expect(next.transportFailed?.at).toBe('2026-05-19T12:00:00.000Z');
+  });
+
+  it('advances lastSeq on transport_failed', () => {
+    const next = reduce(baseState, transportFailedEvt);
+    expect(next.lastSeq).toBe(12);
+  });
+
+  it('does not touch the dismissable banner field', () => {
+    const next = reduce(baseState, transportFailedEvt);
+    expect(next.banner).toBeNull();
+  });
+
+  it('does not lose session/me when transport_failed lands', () => {
+    const next = reduce(baseState, transportFailedEvt);
+    expect(next.session).not.toBeNull();
+    expect(next.me).not.toBeNull();
+  });
+
+  it('preserves transportFailed across a subsequent ephemeral welcome replay (late-joining client)', () => {
+    // Late-joining client: receives ring-buffered transport_failed THEN a fresh
+    // ephemeral welcome (the WS connect path). Welcome must not wipe the failure
+    // state — only `initialState` should clear it.
+    const afterFailure = reduce(baseState, transportFailedEvt);
+    expect(afterFailure.transportFailed).not.toBeNull();
+    const afterWelcome = reduce(afterFailure, welcomeEphemeral);
+    expect(afterWelcome.transportFailed).not.toBeNull();
+    expect(afterWelcome.transportFailed?.code).toBe('cloudflared_permanent_failure');
+  });
+
+  it('accepts cloudflared_version_mismatch code variant', () => {
+    const evt: AnyFrame = {
+      seq: 13,
+      ts: '2026-05-19T12:01:00.000Z',
+      type: 'transport_failed',
+      payload: {
+        code: 'cloudflared_version_mismatch',
+        message: 'cloudflared version 2024.01.01 too old',
+        restart_count: 0,
+        at: '2026-05-19T12:01:00.000Z',
+      },
+    } as unknown as AnyFrame;
+    const next = reduce(baseState, evt);
+    expect(next.transportFailed?.code).toBe('cloudflared_version_mismatch');
+  });
+});
+
 describe('reduce — question lifecycle', () => {
   const baseState = reduce(initialState, welcomeEphemeral);
 

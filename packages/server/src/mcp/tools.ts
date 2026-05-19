@@ -12,7 +12,7 @@ import {
   RecordAnswerOutput,
   StopSessionOutput,
 } from '@shared-brainstorm/shared';
-import type { QuestionId } from '@shared-brainstorm/shared';
+import type { QuestionId, ServerEvent } from '@shared-brainstorm/shared';
 import { SessionManager } from '../session/SessionManager.js';
 import { realClock } from '../session/clock.js';
 import { startHttpServer } from '../http/index.js';
@@ -232,6 +232,13 @@ export async function startSession(
   // without needing to rebuild the Hono app.
   http.setSecureCookie(transportInfo.secureCookie);
 
+  // Reset transport-failure state BEFORE wiring the onError callback. This
+  // ensures a fresh session starts clean even if a prior session ended via
+  // permanent failure, and protects against the (defensive) case where a
+  // transport invokes onError synchronously during registration.
+  mcpState.transportFailed = false;
+  mcpState.lastTransportError = null;
+
   // Wire URL-change callback so transport can update mcpState.publicUrl
   transport.onUrlChange((newUrl) => {
     mcpState.publicUrl = newUrl;
@@ -239,6 +246,47 @@ export async function startSession(
       type: 'tunnel_url_changed',
       payload: { public_url: newUrl },
     });
+  });
+
+  // Wire terminal-failure callback (REL-03 / D-09). Cloudflared fires this once
+  // it has exhausted its restart budget; LAN/mock store the callback but never
+  // invoke it. We do three things:
+  //   1. Set mcpState flag + last-error snapshot so the next askGroup short-circuits.
+  //   2. Emit a loud stderr banner (single-fire — restart loop caps at 3).
+  //   3. Broadcast a ring-buffered transport_failed event so connected and
+  //      late-joining clients can render the permanent-down state. Per D-09
+  //      (research-corrected) this follows the tunnel_url_changed precedent
+  //      via manager.emitExternal — pitfall 6 (no participants connected) is
+  //      acceptable: the stderr banner + mcpState flag still fire, and the
+  //      event lands in the RingBuffer for the next reconnect.
+  transport.onError((reason) => {
+    const at = realClock.isoNow();
+    mcpState.transportFailed = true;
+    mcpState.lastTransportError = {
+      code: reason.code,
+      message: reason.message,
+      restart_count: reason.restart_count,
+      at,
+    };
+    // eslint-disable-next-line no-console
+    console.error(
+      `⚠  Cloudflared tunnel permanently down after ${reason.restart_count} restart attempts. Last error: ${reason.message}`,
+    );
+    // Cast through `unknown` because the generic `Envelope<P>` helper in
+    // packages/shared/src/events.ts erases the `type` literal at d.ts
+    // generation (z.ZodLiteral<string>), so excess-property checking on
+    // direct object literal assignment to Omit<ServerEvent,'seq'|'ts'> fails
+    // even though the variant exists in the schema. The runtime path is
+    // identical to tunnel_url_changed.
+    manager.emitExternal({
+      type: 'transport_failed',
+      payload: {
+        code: reason.code,
+        message: reason.message,
+        restart_count: reason.restart_count,
+        at,
+      },
+    } as unknown as Omit<ServerEvent, 'seq' | 'ts'>);
   });
 
   // Commit to mcpState
@@ -269,6 +317,20 @@ export async function startSession(
 
 export function askGroup(raw: unknown): AskGroupOutput {
   if (!mcpState.manager) throw new Error('No active session. Call startSession first.');
+
+  // REL-03 / D-09 gate: if the transport has permanently failed, short-circuit
+  // BEFORE redacting/broadcasting. The MCP CallToolRequestSchema handler in
+  // mcp/server.ts catches this throw and converts it to `{ isError: true }`
+  // content, surfacing a structured error to the AI host. Per D-10 the
+  // coordinator must call stopSession manually — we do NOT auto-stop here.
+  if (mcpState.transportFailed) {
+    const err = mcpState.lastTransportError;
+    throw new Error(
+      `transport_failed: ${err?.message ?? 'cloudflared tunnel down'} ` +
+        `(code=${err?.code ?? 'unknown'}, restart_count=${err?.restart_count ?? 0}). ` +
+        `Coordinator may need to stopSession and restart.`,
+    );
+  }
 
   const input = AskGroupInput.parse(raw);
   const redacted = redactQuestion(input);
@@ -327,6 +389,8 @@ export async function stopSession(): Promise<StopSessionOutput> {
   mcpState.transport = null;
   mcpState.http = null;
   mcpState.publicUrl = null;
+  mcpState.transportFailed = false;
+  mcpState.lastTransportError = null;
 
   const stopResult = manager.stop('stop_session');
 

@@ -80,6 +80,15 @@ export const ServerEvent = z.discriminatedUnion('type', [
   ),
   Envelope('question_cancelled', z.object({ question_id: z.string(), reason: z.string() })),
   Envelope('tunnel_url_changed', z.object({ public_url: z.string().url() })),
+  Envelope(
+    'transport_failed',
+    z.object({
+      code: z.enum(['cloudflared_permanent_failure', 'cloudflared_version_mismatch']),
+      message: z.string(),
+      restart_count: z.number().int().nonnegative(),
+      at: z.string(),
+    }),
+  ),
   Envelope('session_ended', z.object({ reason: z.enum(['stop_session', 'signal', 'crash', 'ai_host_disconnected']) })),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;

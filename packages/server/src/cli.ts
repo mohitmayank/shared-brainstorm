@@ -1,6 +1,10 @@
 import { realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { mcpState } from './mcp/state.js';
+
+const requirePkg = createRequire(import.meta.url);
+const pkg = requirePkg('../package.json') as { version: string };
 
 const KNOWN_HOSTS = ['claude-code', 'codex', 'opencode', 'gemini-cli'] as const;
 type Host = (typeof KNOWN_HOSTS)[number];
@@ -68,7 +72,7 @@ async function main(): Promise<void> {
   switch (args.mode) {
     case 'version':
       // eslint-disable-next-line no-console
-      console.log(process.env['npm_package_version'] ?? 'dev');
+      console.log(pkg.version);
       return;
     case 'help':
       // eslint-disable-next-line no-console

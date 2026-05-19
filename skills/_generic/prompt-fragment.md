@@ -41,3 +41,17 @@ To disable redaction entirely, set `SHARED_BRAINSTORM_NO_REDACT=1` in the MCP se
 ```
 
 When disabled, a one-line warning prints to stderr at server start.
+
+## Environment
+
+Tune behaviour via env vars in the MCP server's `env` block. Malformed values fall back to defaults with a stderr warning.
+
+- `SHARED_BRAINSTORM_RATE_LIMIT_JOIN` (default `5/min`) — per-IP throttle on `POST /api/join`.
+- `SHARED_BRAINSTORM_RATE_LIMIT_SUGGESTION` (default `30/min`) — per-cookie throttle on `POST /api/suggestion`.
+- `SHARED_BRAINSTORM_RATE_LIMIT_COMMENT` (default `30/min`) — per-cookie throttle on `POST /api/comment`.
+- `SHARED_BRAINSTORM_BIND` (default auto: `127.0.0.1` cloudflared / `0.0.0.0` LAN) — HTTP bind override. IPv4/IPv6 only; hostnames are rejected.
+- `CLOUDFLARED_VERSION` (default `2025.11.1`) — pin the cloudflared binary version on the `npx -p cloudflared` fallback path. Ignored when system `cloudflared` is on PATH.
+- `SHARED_BRAINSTORM_NO_CLIPBOARD=1` — skip auto-copy of the invite text.
+- `SHARED_BRAINSTORM_NO_REDACT=1` — disable question-text redaction.
+
+Rate-limit format is `N/window` where `window ∈ {sec, min, hour}`. See the project `README.md` "Environment variables" section for the canonical reference.

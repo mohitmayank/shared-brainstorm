@@ -108,3 +108,19 @@ To disable redaction entirely, set `SHARED_BRAINSTORM_NO_REDACT=1` in the MCP se
 ```
 
 When disabled, a one-line warning prints to stderr at server start.
+
+## Environment
+
+Set env vars in the MCP server's `env` block (e.g. `~/.claude.json`) when the initiator wants to tune behaviour. The server validates every value and falls back to defaults with a stderr warning if a value is malformed — it never refuses to start.
+
+| Variable | Default | When to suggest setting it |
+|----------|---------|----------------------------|
+| `SHARED_BRAINSTORM_RATE_LIMIT_JOIN` | `5/min` | Throttle teammates rejoining (e.g. `1/min` if you suspect refresh loops). |
+| `SHARED_BRAINSTORM_RATE_LIMIT_SUGGESTION` | `30/min` | Cap per-teammate suggestion velocity per-question. |
+| `SHARED_BRAINSTORM_RATE_LIMIT_COMMENT` | `30/min` | Cap per-teammate comment velocity per-question. |
+| `SHARED_BRAINSTORM_BIND` | auto (`127.0.0.1` with cloudflared, `0.0.0.0` on LAN) | Override the HTTP bind. IPv4/IPv6 only — hostnames are rejected. |
+| `CLOUDFLARED_VERSION` | `2025.11.1` | Pin the cloudflared binary version when using the `npx -p cloudflared` fallback. Ignored when system `cloudflared` is on PATH. |
+| `SHARED_BRAINSTORM_NO_CLIPBOARD` | unset | Set to `1` to skip auto-copying the invite text to the OS clipboard. |
+| `SHARED_BRAINSTORM_NO_REDACT` | unset | Set to `1` to disable question-text redaction (see Redaction section above). |
+
+Rate-limit format is `N/window`, where `window ∈ {sec, min, hour}` — e.g. `30/min`, `5/sec`, `100/hour`. Other window keys (`seconds`, `m`, `h`) trigger the fallback warning. See the project `README.md` "Environment variables" section for the canonical reference.

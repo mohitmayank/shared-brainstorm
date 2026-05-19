@@ -83,7 +83,9 @@ Usage:
   shared-brainstorm                 # default: run MCP stdio server
   shared-brainstorm --install <host>  # write MCP config + skill for host
   shared-brainstorm --version
-Hosts: ${KNOWN_HOSTS.join(', ')}`,
+Hosts: ${KNOWN_HOSTS.join(', ')}
+
+See README "Environment variables" for runtime tuning (rate limits, BIND, CLOUDFLARED_VERSION, NO_REDACT, NO_CLIPBOARD).`,
       );
       return;
     case 'install': {

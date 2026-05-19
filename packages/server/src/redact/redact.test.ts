@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi, afterEach } from 'vitest';
 import { redactText, redactQuestion } from './redact.js';
 
 describe('redactText — paths', () => {
@@ -138,5 +138,67 @@ describe('redactQuestion', () => {
     const r = redactQuestion({ question: 'just a question' });
     expect(r.options).toBeUndefined();
     expect(r.recommendation).toBeUndefined();
+  });
+});
+
+describe('redactQuestion — SHARED_BRAINSTORM_NO_REDACT opt-out', () => {
+  const ORIGINAL = process.env['SHARED_BRAINSTORM_NO_REDACT'];
+
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env['SHARED_BRAINSTORM_NO_REDACT'];
+    else process.env['SHARED_BRAINSTORM_NO_REDACT'] = ORIGINAL;
+    vi.resetModules();
+  });
+
+  it('is pass-through when env var is set to "1"', async () => {
+    process.env['SHARED_BRAINSTORM_NO_REDACT'] = '1';
+    vi.resetModules();
+    const { redactQuestion: rq } = await import('./redact.js');
+    const out = rq({
+      question: 'Open /home/alice/.ssh/id_rsa?',
+      recommendation: 'API_KEY=sk-aaaaaaaaaaaaaaaaaaaaaaaa',
+    });
+    expect(out.question).toBe('Open /home/alice/.ssh/id_rsa?');
+    expect(out.recommendation).toBe('API_KEY=sk-aaaaaaaaaaaaaaaaaaaaaaaa');
+  });
+
+  it('preserves options array shape when opt-out is active', async () => {
+    process.env['SHARED_BRAINSTORM_NO_REDACT'] = 'true';
+    vi.resetModules();
+    const { redactQuestion: rq } = await import('./redact.js');
+    const input = {
+      question: 'q?',
+      options: [{ label: 'AKIAIOSFODNN7EXAMPLE', description: 'aws' }],
+    };
+    const out = rq(input);
+    expect(out.options).toEqual(input.options);
+  });
+
+  it('honors case-insensitive truthy values', async () => {
+    for (const val of ['1', 'true', 'TRUE', 'yes', 'on', ' YES ']) {
+      process.env['SHARED_BRAINSTORM_NO_REDACT'] = val;
+      vi.resetModules();
+      const { redactQuestion: rq } = await import('./redact.js');
+      const out = rq({ question: 'Open /home/alice/.ssh/id_rsa?' });
+      expect(out.question, `failed for value: "${val}"`).toBe('Open /home/alice/.ssh/id_rsa?');
+    }
+  });
+
+  it('still redacts when env var is unset (regression guard)', async () => {
+    delete process.env['SHARED_BRAINSTORM_NO_REDACT'];
+    vi.resetModules();
+    const { redactQuestion: rq } = await import('./redact.js');
+    const out = rq({ question: 'check /home/alice/.ssh/id_rsa' });
+    expect(out.question).toContain('<PATH>');
+  });
+
+  it('is full redaction when env var is set to "0" or "false"', async () => {
+    for (const val of ['0', 'false', 'no', 'off', '']) {
+      process.env['SHARED_BRAINSTORM_NO_REDACT'] = val;
+      vi.resetModules();
+      const { redactQuestion: rq } = await import('./redact.js');
+      const out = rq({ question: 'check /home/alice/.ssh/id_rsa' });
+      expect(out.question, `should still redact for value: "${val}"`).toContain('<PATH>');
+    }
   });
 });

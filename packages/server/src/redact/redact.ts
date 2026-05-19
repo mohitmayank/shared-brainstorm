@@ -1,4 +1,7 @@
 import type { AskGroupInput } from '@shared-brainstorm/shared';
+import { isTruthyEnv } from '../util/env.js';
+
+const REDACTION_DISABLED = isTruthyEnv(process.env['SHARED_BRAINSTORM_NO_REDACT']);
 
 /**
  * Best-effort scrub of paths, env-var assignments, and high-entropy tokens.
@@ -119,6 +122,12 @@ export function redactText(input: string): string {
 }
 
 export function redactQuestion(q: AskGroupInput): AskGroupInput {
+  if (REDACTION_DISABLED) {
+    const out: AskGroupInput = { question: q.question };
+    if (q.options !== undefined) out.options = q.options;
+    if (q.recommendation !== undefined) out.recommendation = q.recommendation;
+    return out;
+  }
   const out: AskGroupInput = {
     question: redactText(q.question),
   };

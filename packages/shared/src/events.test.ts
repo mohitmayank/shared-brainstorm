@@ -86,6 +86,72 @@ describe('WS events', () => {
   });
 });
 
+describe('transport_failed event', () => {
+  const validPayload = {
+    code: 'cloudflared_permanent_failure' as const,
+    message: 'tunnel exited after 3 restart attempts',
+    restart_count: 3,
+    at: '2026-05-19T12:00:00.000Z',
+  };
+
+  it('parses a valid transport_failed event', () => {
+    const parsed = ServerEvent.safeParse({
+      seq: 5,
+      ts: '2026-05-19T12:00:00.000Z',
+      type: 'transport_failed',
+      payload: validPayload,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect(parsed.data.type).toBe('transport_failed');
+    }
+  });
+
+  it('parses transport_failed with cloudflared_version_mismatch code', () => {
+    const parsed = ServerEvent.safeParse({
+      seq: 6,
+      ts: '2026-05-19T12:00:00.000Z',
+      type: 'transport_failed',
+      payload: { ...validPayload, code: 'cloudflared_version_mismatch' },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects transport_failed with unknown code', () => {
+    const bad = ServerEvent.safeParse({
+      seq: 5,
+      ts: '2026-05-19T12:00:00.000Z',
+      type: 'transport_failed',
+      payload: { ...validPayload, code: 'invalid' },
+    });
+    expect(bad.success).toBe(false);
+  });
+
+  it('rejects transport_failed with negative restart_count', () => {
+    const bad = ServerEvent.safeParse({
+      seq: 5,
+      ts: '2026-05-19T12:00:00.000Z',
+      type: 'transport_failed',
+      payload: { ...validPayload, restart_count: -1 },
+    });
+    expect(bad.success).toBe(false);
+  });
+
+  it('rejects transport_failed with missing at field', () => {
+    const bad = ServerEvent.safeParse({
+      seq: 5,
+      ts: '2026-05-19T12:00:00.000Z',
+      type: 'transport_failed',
+      payload: {
+        code: validPayload.code,
+        message: validPayload.message,
+        restart_count: validPayload.restart_count,
+      },
+    });
+    expect(bad.success).toBe(false);
+  });
+});
+
 describe('EphemeralFrame', () => {
   it('parses welcome frame without seq', () => {
     const ok = EphemeralFrame.safeParse({

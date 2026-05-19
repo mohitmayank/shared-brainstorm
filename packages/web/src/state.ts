@@ -12,11 +12,31 @@ type WireComment = WireQuestion['comments'][number];
 // Exported aliases for component use — avoids branded-type mismatches
 export type { WireSession, WireParticipant, WireQuestion, WireSuggestion, WireComment };
 
+/**
+ * Snapshot of a terminal transport failure (REL-03 / D-09). Populated when the
+ * server broadcasts a `transport_failed` event; mirrors the event's payload
+ * shape so the renderer can show the message + code directly. Distinct from
+ * the dismissable `banner` field — `transportFailed` is non-dismissable per
+ * D-09 ("ask the session host to restart").
+ */
+export interface TransportFailedState {
+  code: 'cloudflared_permanent_failure' | 'cloudflared_version_mismatch';
+  message: string;
+  restart_count: number;
+  at: string;
+}
+
 export interface UiState {
   session: WireSession | null;
   me: WireParticipant | null;
   lastSeq: number;
   banner: string | null;
+  /**
+   * Set when the server emits a `transport_failed` event (REL-03). Survives
+   * `welcome` (re-resume) replay because the event is ring-buffered. Cleared
+   * only on `initialState` — the renderer (02-07) decides UX.
+   */
+  transportFailed: TransportFailedState | null;
 }
 
 export const initialState: UiState = {
@@ -24,6 +44,7 @@ export const initialState: UiState = {
   me: null,
   lastSeq: -1,
   banner: null,
+  transportFailed: null,
 };
 
 function isServerEvent(frame: AnyFrame): frame is ServerEvent {
@@ -208,6 +229,25 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       ...state,
       lastSeq: seq,
       banner: `Tunnel URL changed: ${p.public_url}`,
+    };
+  }
+
+  if (type === 'transport_failed') {
+    const p = payload<{
+      code: 'cloudflared_permanent_failure' | 'cloudflared_version_mismatch';
+      message: string;
+      restart_count: number;
+      at: string;
+    }>(evt);
+    return {
+      ...state,
+      lastSeq: seq,
+      transportFailed: {
+        code: p.code,
+        message: p.message,
+        restart_count: p.restart_count,
+        at: p.at,
+      },
     };
   }
 

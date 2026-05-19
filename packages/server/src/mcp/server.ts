@@ -171,6 +171,8 @@ export function runMcpStdio(): void {
       mcpState.transport = null;
       mcpState.http = null;
       mcpState.publicUrl = null;
+      mcpState.transportFailed = false;
+      mcpState.lastTransportError = null;
       transport?.stop().catch(() => {});
       http?.close().catch(() => {});
     }

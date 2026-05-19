@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from './server.js';
 import { SessionManager } from '../session/SessionManager.js';
 import { fixedClock } from '../session/clock.js';
@@ -6,10 +6,17 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-function setup() {
+function setup(opts: {
+  maxParticipants?: number;
+  maxCommentsPerQuestion?: number;
+} = {}) {
   const mgr = new SessionManager({
     clock: fixedClock('2026-04-29T12:00:00Z'),
     transcriptDir: mkdtempSync(join(tmpdir(), 'sb-')),
+    ...(opts.maxParticipants !== undefined ? { maxParticipants: opts.maxParticipants } : {}),
+    ...(opts.maxCommentsPerQuestion !== undefined
+      ? { maxCommentsPerQuestion: opts.maxCommentsPerQuestion }
+      : {}),
   });
   mgr.start({ brief: 'auth flow' });
   const app = buildApp({ manager: mgr });
@@ -115,5 +122,101 @@ describe('HTTP API', () => {
     expect(r.status).toBe(200);
     const body = (await r.json()) as { brief: string };
     expect(body.brief).toBe('auth flow');
+  });
+
+  // ---------------------------------------------------------------------------
+  // REL-07: cap → 409 mapping (D-06)
+  // ---------------------------------------------------------------------------
+  describe('cap → 409 mapping (REL-07 / D-06)', () => {
+    it('POST /api/join returns 409 cap_exceeded when maxParticipants reached', async () => {
+      const { app, mgr } = setup({ maxParticipants: 2 });
+      const body = (name: string) => ({ display_name: name, join_code: mgr.joinCode() });
+      const r1 = await app.request('/api/join', json(body('A')));
+      const r2 = await app.request('/api/join', json(body('B')));
+      const r3 = await app.request('/api/join', json(body('C')));
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      expect(r3.status).toBe(409);
+      const payload = (await r3.json()) as { error: string; limit: number };
+      expect(payload).toEqual({ error: 'cap_exceeded', limit: 2 });
+      // D-06: response body must NOT include the granular suffix
+      // (`:participants` / etc.) — that stays server-side.
+      expect((payload as Record<string, unknown>)['code']).toBeUndefined();
+    });
+
+    it('POST /api/comment returns 409 cap_exceeded when maxCommentsPerQuestion reached', async () => {
+      const { app, mgr } = setup({ maxCommentsPerQuestion: 1 });
+      const { cookie } = await joinAs(app, mgr, 'Alice');
+      mgr.askGroup({ question: 'q?' });
+      const qid = mgr.currentQuestion()!.id;
+      const c1 = await app.request(
+        '/api/comment',
+        json({ question_id: qid, text: 'first' }, cookie),
+      );
+      const c2 = await app.request(
+        '/api/comment',
+        json({ question_id: qid, text: 'second' }, cookie),
+      );
+      expect(c1.status).toBe(200);
+      expect(c2.status).toBe(409);
+      const payload = (await c2.json()) as { error: string; limit: number };
+      expect(payload).toEqual({ error: 'cap_exceeded', limit: 1 });
+    });
+
+    it('cap 409 and rate-limit 429 are distinct codes (sanity)', async () => {
+      const { app, mgr } = setup({ maxParticipants: 1 });
+      const body = (name: string) => ({ display_name: name, join_code: mgr.joinCode() });
+      const r1 = await app.request('/api/join', json(body('A')));
+      const r2 = await app.request('/api/join', json(body('B')));
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(409);
+      const payload = (await r2.json()) as { error: string };
+      expect(payload.error).toBe('cap_exceeded');
+      expect(payload.error).not.toBe('rate_limited');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // REL-06: rate-limit route wiring (HTTP-level)
+  // Full middleware unit coverage lives in 02-01's rateLimit.test.ts.
+  // Test (1) is REQUIRED — it's the only HTTP-level proof that the middleware
+  // is mounted on /api/join. Tests (2)/(3) MAY be skipped if flaky.
+  // ---------------------------------------------------------------------------
+  describe('rate-limit wiring (REL-06)', () => {
+    const ENV_KEY = 'SHARED_BRAINSTORM_RATE_LIMIT_JOIN';
+    let originalEnv: string | undefined;
+
+    beforeEach(() => {
+      originalEnv = process.env[ENV_KEY];
+      // Tighten the join window to 5/min so a 6th rapid request trips it.
+      process.env[ENV_KEY] = '5/min';
+    });
+
+    afterEach(() => {
+      if (originalEnv === undefined) delete process.env[ENV_KEY];
+      else process.env[ENV_KEY] = originalEnv;
+    });
+
+    it('POST /api/join 6× in rapid succession — 6th request is 429 with retry_after_ms', async () => {
+      // Build the app AFTER setting the env var so the middleware reads it.
+      const { app, mgr } = setup();
+      const mkBody = (name: string) => ({ display_name: name, join_code: mgr.joinCode() });
+      const statuses: number[] = [];
+      let lastBody: unknown = null;
+      let lastHeaders: Headers | null = null;
+      for (let i = 0; i < 6; i++) {
+        const r = await app.request('/api/join', json(mkBody(`U${i}`)));
+        statuses.push(r.status);
+        if (i === 5) {
+          lastHeaders = r.headers;
+          lastBody = await r.json();
+        }
+      }
+      expect(statuses).toEqual([200, 200, 200, 200, 200, 429]);
+      const body = lastBody as { error: string; retry_after_ms: number };
+      expect(body.error).toBe('rate_limited');
+      expect(body.retry_after_ms).toBeGreaterThan(0);
+      expect(lastHeaders!.get('Retry-After')).toBeTruthy();
+    });
   });
 });

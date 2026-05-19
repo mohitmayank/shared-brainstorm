@@ -30,6 +30,27 @@ export interface SessionManagerOpts {
    */
   broadcast?: (event: ServerEvent) => void;
   transcriptDir: string;
+  /** REL-07 / D-05: max participants per session. Default 50. */
+  maxParticipants?: number;
+  /** REL-07 / D-05: max suggestions per participant per question. Default 5. */
+  maxSuggestionsPerParticipantPerQuestion?: number;
+  /** REL-07 / D-05: max comments per question (total across participants). Default 100. */
+  maxCommentsPerQuestion?: number;
+}
+
+/**
+ * Build a typed cap-exceeded error. Mirrors the `.code` attachment pattern in
+ * `tickets.ts:35-40` and adds a numeric `.limit` so the HTTP layer can include
+ * the configured cap value in the 409 response body (D-06).
+ *
+ * Cap errors are thrown BEFORE any `emit()` call (D-07) — they are HTTP-layer
+ * rejections and must never enter the RingBuffer / transcript.
+ */
+function capError(code: string, limit: number, message: string): Error {
+  const e = new Error(message);
+  (e as Error & { code: string; limit: number }).code = code;
+  (e as Error & { code: string; limit: number }).limit = limit;
+  return e;
 }
 
 interface ActiveSession {
@@ -89,6 +110,16 @@ export class SessionManager {
 
   addParticipant(args: { display_name: string }): Participant {
     const a = this.requireActive();
+    // REL-07 / D-07: cap check throws BEFORE any mutation or emit() so cap
+    // rejections never enter the RingBuffer / transcript.
+    const limit = this.opts.maxParticipants ?? 50;
+    if (a.participants.size >= limit) {
+      throw capError(
+        'cap_exceeded:participants',
+        limit,
+        `participant cap reached (${limit})`,
+      );
+    }
     const p: Participant = {
       id: newParticipantId(),
       display_name: args.display_name,
@@ -155,6 +186,26 @@ export class SessionManager {
       this.tickets.bump(q.ticket_id);
       return;
     }
+    // REL-07 / D-05 / D-07: cap throw on the insert branch only — updates above
+    // are not counted. Throw BEFORE the push() + emit() so a rejected insert
+    // never enters the RingBuffer.
+    //
+    // Forward-compat seatbelt: under current dedupe-by-participant logic this
+    // cap is unreachable (a same-participant re-submit goes through the
+    // `existing` branch above, so any one participant can only ever have 1
+    // suggestion per question). Intentionally untested. See 02-03-PLAN.md
+    // §Concerns / user resolution (Interpretation A, 2026-05-19) — the field
+    // ships so when batch-question semantics arrive in a later phase the cap
+    // is already wired.
+    const sugLimit = this.opts.maxSuggestionsPerParticipantPerQuestion ?? 5;
+    const mine = q.suggestions.filter((s) => s.participant_id === args.participant_id).length;
+    if (mine >= sugLimit) {
+      throw capError(
+        'cap_exceeded:suggestions',
+        sugLimit,
+        `suggestion cap reached for participant (${sugLimit} per question)`,
+      );
+    }
     const sug = {
       id: `s_${q.suggestions.length + 1}`,
       participant_id: args.participant_id,
@@ -176,6 +227,16 @@ export class SessionManager {
     const q = a.current_question;
     if (!q || q.id !== args.question_id) return;
     if (!a.participants.has(args.participant_id)) return;
+    // REL-07 / D-07: total comments per question cap. Throw BEFORE push() +
+    // emit() so cap rejections never enter the RingBuffer / transcript.
+    const limit = this.opts.maxCommentsPerQuestion ?? 100;
+    if (q.comments.length >= limit) {
+      throw capError(
+        'cap_exceeded:comments',
+        limit,
+        `comment cap reached for question (${limit} total)`,
+      );
+    }
     const c = {
       id: `c_${q.comments.length + 1}`,
       participant_id: args.participant_id,

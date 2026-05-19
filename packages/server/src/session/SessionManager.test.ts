@@ -22,6 +22,33 @@ const makeMgr = () => {
   };
 };
 
+const makeMgrWithCaps = (caps: {
+  maxParticipants?: number;
+  maxSuggestionsPerParticipantPerQuestion?: number;
+  maxCommentsPerQuestion?: number;
+}) => {
+  const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
+  const events: ServerEvent[] = [];
+  const mgr = new SessionManager({
+    clock: fixedClock('2026-04-29T12:00:00Z'),
+    broadcast: (e) => events.push(e),
+    transcriptDir: dir,
+    ...(caps.maxParticipants !== undefined ? { maxParticipants: caps.maxParticipants } : {}),
+    ...(caps.maxSuggestionsPerParticipantPerQuestion !== undefined
+      ? { maxSuggestionsPerParticipantPerQuestion: caps.maxSuggestionsPerParticipantPerQuestion }
+      : {}),
+    ...(caps.maxCommentsPerQuestion !== undefined
+      ? { maxCommentsPerQuestion: caps.maxCommentsPerQuestion }
+      : {}),
+  });
+  return {
+    mgr,
+    events,
+    dir,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+};
+
 describe('SessionManager', () => {
   it('start() creates a session with id and join_code', () => {
     const { mgr, cleanup } = makeMgr();
@@ -404,5 +431,130 @@ describe('SessionManager', () => {
     } finally {
       cleanup();
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // caps (REL-07) — D-05 / D-06 / D-07
+  // ---------------------------------------------------------------------------
+  describe('caps (REL-07)', () => {
+    it('addParticipant throws cap_exceeded:participants when maxParticipants reached', () => {
+      const { mgr, cleanup } = makeMgrWithCaps({ maxParticipants: 3 });
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.addParticipant({ display_name: 'A' });
+        mgr.addParticipant({ display_name: 'B' });
+        mgr.addParticipant({ display_name: 'C' });
+        let caught: unknown;
+        try {
+          mgr.addParticipant({ display_name: 'D' });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(Error);
+        const err = caught as Error & { code: string; limit: number };
+        expect(err.code).toBe('cap_exceeded:participants');
+        expect(err.limit).toBe(3);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('cap-rejected participant does NOT emit participant_joined (D-07)', () => {
+      const { mgr, events, cleanup } = makeMgrWithCaps({ maxParticipants: 2 });
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.addParticipant({ display_name: 'A' });
+        mgr.addParticipant({ display_name: 'B' });
+        expect(events.filter((e) => e.type === 'participant_joined')).toHaveLength(2);
+        expect(() => mgr.addParticipant({ display_name: 'C' })).toThrow(/participant cap/);
+        // No new participant_joined event from the rejected add.
+        expect(events.filter((e) => e.type === 'participant_joined')).toHaveLength(2);
+      } finally {
+        cleanup();
+      }
+    });
+
+    // NOTE: postSuggestion cap test deferred per 02-03-PLAN.md §Concerns and
+    // user resolution (Interpretation A, 2026-05-19). Under the current
+    // dedupe-by-participant logic the per-participant cap is unreachable —
+    // a re-submit from the same participant updates the existing suggestion
+    // rather than appending a new one, so any one participant can only ever
+    // have 1 suggestion per question. The throw branch ships as a
+    // forward-compat seatbelt for when batch-question semantics arrive in a
+    // later phase; intentionally untested at this layer.
+
+    it('postComment throws cap_exceeded:comments when maxCommentsPerQuestion reached', () => {
+      const { mgr, cleanup } = makeMgrWithCaps({ maxCommentsPerQuestion: 5 });
+      try {
+        mgr.start({ brief: 'a' });
+        const p = mgr.addParticipant({ display_name: 'A' });
+        mgr.askGroup({ question: 'q?' });
+        const q = mgr.currentQuestion()!;
+        for (let i = 0; i < 5; i++) {
+          mgr.postComment({ participant_id: p.id, question_id: q.id, text: `c${i}` });
+        }
+        let caught: unknown;
+        try {
+          mgr.postComment({ participant_id: p.id, question_id: q.id, text: 'overflow' });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(Error);
+        const err = caught as Error & { code: string; limit: number };
+        expect(err.code).toBe('cap_exceeded:comments');
+        expect(err.limit).toBe(5);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('cap-rejected comment does NOT emit comment_added (D-07)', () => {
+      const { mgr, events, cleanup } = makeMgrWithCaps({ maxCommentsPerQuestion: 2 });
+      try {
+        mgr.start({ brief: 'a' });
+        const p = mgr.addParticipant({ display_name: 'A' });
+        mgr.askGroup({ question: 'q?' });
+        const q = mgr.currentQuestion()!;
+        mgr.postComment({ participant_id: p.id, question_id: q.id, text: '1' });
+        mgr.postComment({ participant_id: p.id, question_id: q.id, text: '2' });
+        expect(events.filter((e) => e.type === 'comment_added')).toHaveLength(2);
+        expect(() =>
+          mgr.postComment({ participant_id: p.id, question_id: q.id, text: '3' }),
+        ).toThrow(/comment cap/);
+        // No new comment_added event from the rejected post.
+        expect(events.filter((e) => e.type === 'comment_added')).toHaveLength(2);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('default caps allow 50 participants and 100 comments per question', () => {
+      // Use the standard makeMgr() — no cap opts.
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        // 50 participants should all succeed.
+        const participants = [];
+        for (let i = 0; i < 50; i++) {
+          participants.push(mgr.addParticipant({ display_name: `P${i}` }));
+        }
+        expect(participants).toHaveLength(50);
+        // 51st should throw.
+        expect(() => mgr.addParticipant({ display_name: 'P51' })).toThrow(/participant cap/);
+
+        mgr.askGroup({ question: 'q?' });
+        const q = mgr.currentQuestion()!;
+        const first = participants[0]!;
+        for (let i = 0; i < 100; i++) {
+          mgr.postComment({ participant_id: first.id, question_id: q.id, text: `c${i}` });
+        }
+        expect(q.comments).toHaveLength(100);
+        expect(() =>
+          mgr.postComment({ participant_id: first.id, question_id: q.id, text: 'overflow' }),
+        ).toThrow(/comment cap/);
+      } finally {
+        cleanup();
+      }
+    });
   });
 });

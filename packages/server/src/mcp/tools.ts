@@ -20,13 +20,8 @@ import { redactQuestion } from '../redact/redact.js';
 import type { Transport, TransportInfo, TransportLocal } from '../transport/Transport.js';
 import { selectTransport as defaultSelectTransport } from '../transport/selectTransport.js';
 import { copyToClipboard as defaultCopyToClipboard } from '../util/clipboard.js';
+import { isTruthyEnv } from '../util/env.js';
 import { mcpState } from './state.js';
-
-function isTruthyEnv(v: string | undefined): boolean {
-  if (!v) return false;
-  const s = v.trim().toLowerCase();
-  return s === '1' || s === 'true' || s === 'yes' || s === 'on';
-}
 
 function buildInviteText(publicUrl: string, joinCode: string): string {
   return [

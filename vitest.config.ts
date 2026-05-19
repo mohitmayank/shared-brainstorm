@@ -7,7 +7,11 @@ export default defineConfig({
       ['packages/web/src/**', 'jsdom'],
       ['**/*', 'node'],
     ],
-    include: ['packages/*/src/**/*.test.ts', 'packages/*/src/**/*.test.tsx'],
+    include: [
+      'packages/*/src/**/*.test.ts',
+      'packages/*/src/**/*.test.tsx',
+      'packages/*/bin/*.test.ts',
+    ],
     coverage: {
       reporter: ['text', 'lcov'],
       exclude: ['**/dist/**', '**/*.config.*', '**/index.ts'],

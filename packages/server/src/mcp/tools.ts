@@ -17,8 +17,16 @@ import { SessionManager } from '../session/SessionManager.js';
 import { realClock } from '../session/clock.js';
 import { startHttpServer } from '../http/index.js';
 import { redactQuestion } from '../redact/redact.js';
-import type { Transport, TransportInfo, TransportLocal } from '../transport/Transport.js';
-import { selectTransport as defaultSelectTransport } from '../transport/selectTransport.js';
+import type {
+  Transport,
+  TransportErrorReason,
+  TransportInfo,
+  TransportLocal,
+} from '../transport/Transport.js';
+import {
+  selectTransport as defaultSelectTransport,
+  validateBindOverride,
+} from '../transport/selectTransport.js';
 import { copyToClipboard as defaultCopyToClipboard } from '../util/clipboard.js';
 import { isTruthyEnv } from '../util/env.js';
 import { mcpState } from './state.js';
@@ -60,11 +68,15 @@ function resolveStaticDir(): string | undefined {
 
 class MockTransport implements Transport {
   private urlChangeCb: ((newUrl: string) => void) | null = null;
+  private onErrorCb: ((reason: TransportErrorReason) => void) | null = null;
 
   async start(local: TransportLocal): Promise<TransportInfo> {
     return {
       publicUrl: `http://${local.host}:${local.port}`,
       kind: 'mock' as const,
+      // D-13: Mock uses LAN-style defaults so tests don't accidentally require Secure.
+      bind: '0.0.0.0',
+      secureCookie: false,
     };
   }
 
@@ -76,9 +88,22 @@ class MockTransport implements Transport {
     this.urlChangeCb = cb;
   }
 
+  onError(cb: (reason: TransportErrorReason) => void): void {
+    this.onErrorCb = cb;
+  }
+
+  bindHint(): '0.0.0.0' {
+    return '0.0.0.0';
+  }
+
   /** Expose stored callback (for tests). */
   _getUrlChangeCb(): ((newUrl: string) => void) | null {
     return this.urlChangeCb;
+  }
+
+  /** Expose stored onError callback (for tests). */
+  _getOnErrorCb(): ((reason: TransportErrorReason) => void) | null {
+    return this.onErrorCb;
   }
 }
 
@@ -134,20 +159,14 @@ export async function startSession(
 
   const { session_id, join_code } = manager.start({ brief: input.brief });
 
-  // Boot HTTP server on a random port. Bind the wildcard so LanTransport can
-  // resolve a real LAN IP (binding to 127.0.0.1 short-circuits pickReachableIp).
-  const staticDir =
-    opts?.staticDir === null
-      ? undefined
-      : (opts?.staticDir ?? resolveStaticDir());
-  const httpArgs: Parameters<typeof startHttpServer>[0] = {
-    manager,
-    listen: { port: 0, host: '0.0.0.0' },
-  };
-  if (staticDir) httpArgs.staticDir = staticDir;
-  const http = await startHttpServer(httpArgs);
-
-  const local: TransportLocal = { host: http.host, port: http.port };
+  // ── Phase 2 (02-04) restructure ────────────────────────────────────────
+  // 1. Construct the transport WITHOUT calling .start() yet.
+  // 2. Use transport.bindHint() to pick the effective bind, then apply the
+  //    SHARED_BRAINSTORM_BIND override (REL-08 / D-17).
+  // 3. Boot the HTTP server with that effective bind.
+  // 4. Call transport.start({host, port}) once we know the local port.
+  // 5. Pass transportInfo.secureCookie back to the running app — see below.
+  // ───────────────────────────────────────────────────────────────────────
 
   const select = opts?.selectTransport ?? defaultSelectTransport;
   let transport: Transport;
@@ -159,8 +178,59 @@ export async function startSession(
     transport = await select(selectOpts);
   }
 
+  // Effective bind: env override wins (with stderr warning); else transport's hint.
+  const transportBindHint = transport.bindHint();
+  const bindOverride = validateBindOverride(process.env['SHARED_BRAINSTORM_BIND']);
+  let effectiveBind: string = transportBindHint;
+  if (bindOverride.kind === 'accept') {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `⚠  SHARED_BRAINSTORM_BIND=${bindOverride.value} overrides transport default — only use if you know why`,
+    );
+    effectiveBind = bindOverride.value;
+  } else if (bindOverride.kind === 'reject') {
+    const raw = process.env['SHARED_BRAINSTORM_BIND'] ?? '';
+    // eslint-disable-next-line no-console
+    console.warn(
+      `⚠  SHARED_BRAINSTORM_BIND=${raw} ignored: ${bindOverride.reason}; falling back to transport default ${transportBindHint}`,
+    );
+  }
+
+  // Boot HTTP server on a random port at the effective bind.
+  const staticDir =
+    opts?.staticDir === null
+      ? undefined
+      : (opts?.staticDir ?? resolveStaticDir());
+  const httpArgs: Parameters<typeof startHttpServer>[0] = {
+    manager,
+    listen: { port: 0, host: effectiveBind },
+  };
+  if (staticDir) httpArgs.staticDir = staticDir;
+  const http = await startHttpServer(httpArgs);
+
+  const local: TransportLocal = { host: http.host, port: http.port };
+
   const transportInfo = await transport.start(local);
   const publicUrl = transportInfo.publicUrl;
+
+  // Sanity check: transport's returned bind should match the hint we used,
+  // unless the user overrode it via the env var. A mismatch with no override
+  // is a transport-implementation bug.
+  if (
+    bindOverride.kind !== 'accept' &&
+    transportInfo.bind !== transportBindHint
+  ) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `transport.bindHint() returned ${transportBindHint} but .start() returned ${transportInfo.bind} — implementation mismatch`,
+    );
+  }
+
+  // Now that the transport has resolved its advisory, flip the participant
+  // cookie's Secure flag (D-13 / D-16). The HTTP server captures secureCookie
+  // via a thunk so the flip propagates to subsequent /api/join requests
+  // without needing to rebuild the Hono app.
+  http.setSecureCookie(transportInfo.secureCookie);
 
   // Wire URL-change callback so transport can update mcpState.publicUrl
   transport.onUrlChange((newUrl) => {

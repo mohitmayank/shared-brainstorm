@@ -208,6 +208,68 @@ describe('CloudflaredTransport', () => {
     expect((capturedArgs as string[])[urlIdx + 1]).toBe('http://127.0.0.1:9999');
   });
 
+  // ---------------------------------------------------------------------------
+  // Phase 2 / 02-04 — REL-08 / REL-09 / REL-03 scaffolding
+  // ---------------------------------------------------------------------------
+  describe('Transport widening (REL-08 / REL-09 / REL-03 scaffolding)', () => {
+    it('start() returns bind: "127.0.0.1" and secureCookie: true (D-13 / D-16)', async () => {
+      const fakeProc = makeFakeProcess({
+        stderrLines: [
+          '2024-01-01T00:00:00Z INF | https://widening-test.trycloudflare.com |',
+        ],
+      });
+
+      const transport = new CloudflaredTransport({
+        command: 'cloudflared',
+        spawn: makeSpawnFn(fakeProc),
+        pidFile: '/tmp/test-tunnel-widen.pid',
+      });
+
+      const info = await transport.start(LOCAL);
+      expect(info.bind).toBe('127.0.0.1');
+      expect(info.secureCookie).toBe(true);
+      // Existing fields unchanged.
+      expect(info.kind).toBe('cloudflared');
+      expect(info.publicUrl).toBe('https://widening-test.trycloudflare.com');
+
+      await transport.stop();
+    });
+
+    it('bindHint() returns "127.0.0.1" without calling start()', () => {
+      const transport = new CloudflaredTransport({
+        command: 'cloudflared',
+        pidFile: '/tmp/test-tunnel-bindhint.pid',
+      });
+      expect(transport.bindHint()).toBe('127.0.0.1');
+    });
+
+    it('onError(cb) stores the callback but never invokes it on a successful run (02-04 scaffolding)', async () => {
+      // The full restart loop / onError firing path lands in 02-05. For 02-04,
+      // the callback must be storable without crashing and must NOT fire on a
+      // normal-exit path that the existing single-restart logic already covers.
+      const fakeProc = makeFakeProcess({
+        stderrLines: [
+          '2024-01-01T00:00:00Z INF | https://onerror-test.trycloudflare.com |',
+        ],
+      });
+
+      const transport = new CloudflaredTransport({
+        command: 'cloudflared',
+        spawn: makeSpawnFn(fakeProc),
+        pidFile: '/tmp/test-tunnel-onerror.pid',
+      });
+
+      let called = false;
+      transport.onError(() => {
+        called = true;
+      });
+
+      await transport.start(LOCAL);
+      await transport.stop();
+      expect(called).toBe(false);
+    });
+  });
+
   it('fires onUrlChange callback with new URL on restart', async () => {
     // First process — emits URL then exits.
     const firstProc = makeFakeProcess({

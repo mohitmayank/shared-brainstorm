@@ -38,4 +38,33 @@ describe('LanTransport', () => {
     await t.stop();
     expect(called).toBe(false);
   });
+
+  // -------------------------------------------------------------------------
+  // Phase 2 / 02-04 — REL-08 / REL-09 / REL-03 scaffolding
+  // -------------------------------------------------------------------------
+  describe('Transport widening (REL-08 / REL-09 / REL-03 scaffolding)', () => {
+    it('start() returns bind: "0.0.0.0" and secureCookie: false (D-13 / D-15)', async () => {
+      const t = new LanTransport();
+      const info = await t.start({ host: '127.0.0.1', port: 7711 });
+      expect(info.bind).toBe('0.0.0.0');
+      expect(info.secureCookie).toBe(false);
+      await t.stop();
+    });
+
+    it('bindHint() returns "0.0.0.0" without calling start()', () => {
+      const t = new LanTransport();
+      expect(t.bindHint()).toBe('0.0.0.0');
+    });
+
+    it('onError(cb) stores the callback but never invokes it (LAN has no terminal failure path)', async () => {
+      const t = new LanTransport();
+      let called = false;
+      t.onError(() => {
+        called = true;
+      });
+      await t.start({ host: '127.0.0.1', port: 7711 });
+      await t.stop();
+      expect(called).toBe(false);
+    });
+  });
 });

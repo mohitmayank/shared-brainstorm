@@ -3,7 +3,12 @@ import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import type { Transport, TransportInfo, TransportLocal } from './Transport.js';
+import type {
+  Transport,
+  TransportErrorReason,
+  TransportInfo,
+  TransportLocal,
+} from './Transport.js';
 import { parseCloudflaredUrl } from './parseCloudflaredUrl.js';
 
 /**
@@ -58,6 +63,9 @@ export class CloudflaredTransport implements Transport {
   private restartCount = 0;
   private currentLocal: TransportLocal | null = null;
   private urlChangeCb: ((newUrl: string) => void) | null = null;
+  // REL-03 scaffolding (02-04): callback storage only. The actual firing path
+  // from the 3-restart loop lands in 02-05; until then this is a no-op hook.
+  private onErrorCb: ((reason: TransportErrorReason) => void) | null = null;
   private stopped = false;
 
   constructor(opts: CloudflaredTransportOpts) {
@@ -76,12 +84,27 @@ export class CloudflaredTransport implements Transport {
     this.urlChangeCb = cb;
   }
 
+  onError(cb: (reason: TransportErrorReason) => void): void {
+    this.onErrorCb = cb;
+  }
+
+  bindHint(): '127.0.0.1' {
+    return '127.0.0.1';
+  }
+
   async start(local: TransportLocal): Promise<TransportInfo> {
     this.stopped = false;
     this.restartCount = 0;
     this.currentLocal = local;
     const url = await this.spawnAndWaitForUrl(local);
-    return { publicUrl: url, kind: 'cloudflared' };
+    return {
+      publicUrl: url,
+      kind: 'cloudflared',
+      // D-13: cloudflared serves traffic locally over loopback only; HTTPS happens
+      // at the cloudflared layer above us, so participant cookies must be Secure.
+      bind: '127.0.0.1',
+      secureCookie: true,
+    };
   }
 
   async stop(): Promise<void> {

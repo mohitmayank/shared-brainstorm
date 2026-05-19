@@ -1,5 +1,10 @@
 import { networkInterfaces } from 'node:os';
-import type { Transport, TransportInfo, TransportLocal } from './Transport.js';
+import type {
+  Transport,
+  TransportErrorReason,
+  TransportInfo,
+  TransportLocal,
+} from './Transport.js';
 
 /**
  * Resolve a host string to something a peer on the LAN can actually reach.
@@ -31,6 +36,9 @@ export class LanTransport implements Transport {
   // Stored for interface conformance; LAN URLs never change mid-session so
   // this is intentionally never invoked. See Transport.onUrlChange docs.
   private onUrlChangeCb: ((newUrl: string) => void) | null = null;
+  // REL-03 scaffolding (02-04): LAN URLs are stable for the session, so this
+  // callback is stored but never invoked. Symmetry with onUrlChange.
+  private onErrorCb: ((reason: TransportErrorReason) => void) | null = null;
 
   async start(local: TransportLocal): Promise<TransportInfo> {
     const ip = pickReachableIp(local.host);
@@ -38,6 +46,9 @@ export class LanTransport implements Transport {
       publicUrl: `http://${ip}:${local.port}`,
       kind: 'lan',
       warning: 'LAN-only mode: helpers must be on the same network.',
+      // D-13 / D-15: LAN keeps wildcard bind + non-Secure cookie.
+      bind: '0.0.0.0',
+      secureCookie: false,
     };
   }
 
@@ -47,5 +58,13 @@ export class LanTransport implements Transport {
 
   onUrlChange(cb: (newUrl: string) => void): void {
     this.onUrlChangeCb = cb;
+  }
+
+  onError(cb: (reason: TransportErrorReason) => void): void {
+    this.onErrorCb = cb;
+  }
+
+  bindHint(): '0.0.0.0' {
+    return '0.0.0.0';
   }
 }

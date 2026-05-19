@@ -45,7 +45,25 @@ function isCapError(e: unknown): e is Error & { code: string; limit: number } {
   return typeof code === 'string' && code.startsWith('cap_exceeded') && typeof limit === 'number';
 }
 
-export function buildApp({ manager }: { manager: SessionManager }): Hono<AppEnv> {
+export function buildApp({
+  manager,
+  secureCookie = false,
+}: {
+  manager: SessionManager;
+  /**
+   * Whether to set the `Secure` attribute on the participant cookie. Wired by
+   * `startHttpServer` from the active transport's `secureCookie` advisory
+   * (REL-09 / D-13 / D-16). Accepts either a static boolean (most callers,
+   * incl. unit tests) or a thunk so that `startSession` can update the value
+   * AFTER `transport.start()` has resolved but BEFORE the first `/api/join`
+   * request lands (see tools.ts boot-order rationale: HTTP boots before
+   * transport.start() can run because the transport needs the local port).
+   * Defaults to `false` so callers that haven't been updated keep LAN behavior.
+   */
+  secureCookie?: boolean | (() => boolean);
+}): Hono<AppEnv> {
+  const resolveSecure: () => boolean =
+    typeof secureCookie === 'function' ? secureCookie : () => secureCookie;
   const app = new Hono<AppEnv>();
 
   // REL-06: rate-limit middlewares. Read env vars at build time; fall back to
@@ -100,7 +118,7 @@ export function buildApp({ manager }: { manager: SessionManager }): Hono<AppEnv>
       if (isCapError(e)) return c.json({ error: 'cap_exceeded', limit: e.limit }, 409);
       throw e;
     }
-    setParticipantCookie(c, p.id);
+    setParticipantCookie(c, p.id, { secure: resolveSecure() });
     return c.json({ id: p.id, display_name: p.display_name });
   });
 

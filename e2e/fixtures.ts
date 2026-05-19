@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startSession, stopSession } from '../packages/server/src/mcp/tools.js';
 import { mcpState } from '../packages/server/src/mcp/state.js';
+import { LanTransport } from '../packages/server/src/transport/LanTransport.js';
 
 interface SessionFixture {
   session: {
@@ -28,6 +29,24 @@ export const test = base.extend<SessionFixture>({
         copyToClipboard: async () => null,
       },
     );
+    // REL-09 regression guard (Phase 2 / 02-04): LAN mode MUST NOT set
+    // `secureCookie:true`, otherwise the e2e fixture would attempt to
+    // populate a Secure cookie over plain HTTP and tests would silently
+    // drop the participant cookie. Probe a fresh LanTransport (the same
+    // class startSession instantiated) to assert its advisory shape; the
+    // live transport's state is already in use, so this gives us a clean
+    // read without disturbing it.
+    const lanProbe = await new LanTransport().start({ host: '0.0.0.0', port: 0 });
+    if (lanProbe.secureCookie !== false) {
+      throw new Error(
+        `LAN fixture regression: LanTransport.secureCookie=${lanProbe.secureCookie}, expected false (REL-09 D-15)`,
+      );
+    }
+    if (lanProbe.bind !== '0.0.0.0') {
+      throw new Error(
+        `LAN fixture regression: LanTransport.bind=${lanProbe.bind}, expected '0.0.0.0' (REL-08 D-13)`,
+      );
+    }
     try {
       await use({ ...session, transcriptDir });
     } finally {

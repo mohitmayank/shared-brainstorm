@@ -9,6 +9,7 @@ import { join } from 'node:path';
 function setup(opts: {
   maxParticipants?: number;
   maxCommentsPerQuestion?: number;
+  secureCookie?: boolean;
 } = {}) {
   const mgr = new SessionManager({
     clock: fixedClock('2026-04-29T12:00:00Z'),
@@ -19,7 +20,10 @@ function setup(opts: {
       : {}),
   });
   mgr.start({ brief: 'auth flow' });
-  const app = buildApp({ manager: mgr });
+  const app = buildApp({
+    manager: mgr,
+    ...(opts.secureCookie !== undefined ? { secureCookie: opts.secureCookie } : {}),
+  });
   return { app, mgr };
 }
 
@@ -122,6 +126,51 @@ describe('HTTP API', () => {
     expect(r.status).toBe(200);
     const body = (await r.json()) as { brief: string };
     expect(body.brief).toBe('auth flow');
+  });
+
+  // ---------------------------------------------------------------------------
+  // REL-09: Secure cookie flag (D-13 / D-16)
+  // ---------------------------------------------------------------------------
+  describe('Secure cookie flag (REL-09)', () => {
+    it('POST /api/join sets Secure on the cookie when buildApp({secureCookie:true})', async () => {
+      const { app, mgr } = setup({ secureCookie: true });
+      const res = await app.request(
+        '/api/join',
+        json({ display_name: 'Alice', join_code: mgr.joinCode() }),
+      );
+      expect(res.status).toBe(200);
+      const cookie = res.headers.get('set-cookie');
+      expect(cookie).toMatch(/sb_p=/);
+      expect(cookie).toMatch(/; Secure(?:;|$)/);
+      // D-16: other attributes unchanged.
+      expect(cookie).toMatch(/HttpOnly/);
+      expect(cookie).toMatch(/SameSite=Lax/);
+      expect(cookie).toMatch(/Max-Age=86400/);
+    });
+
+    it('POST /api/join does NOT set Secure when buildApp({secureCookie:false})', async () => {
+      const { app, mgr } = setup({ secureCookie: false });
+      const res = await app.request(
+        '/api/join',
+        json({ display_name: 'Bob', join_code: mgr.joinCode() }),
+      );
+      expect(res.status).toBe(200);
+      const cookie = res.headers.get('set-cookie');
+      expect(cookie).toMatch(/sb_p=/);
+      expect(cookie).not.toMatch(/Secure/);
+    });
+
+    it('POST /api/join does NOT set Secure when buildApp() omits secureCookie (LAN default)', async () => {
+      const { app, mgr } = setup();
+      const res = await app.request(
+        '/api/join',
+        json({ display_name: 'Carol', join_code: mgr.joinCode() }),
+      );
+      expect(res.status).toBe(200);
+      const cookie = res.headers.get('set-cookie');
+      expect(cookie).toMatch(/sb_p=/);
+      expect(cookie).not.toMatch(/Secure/);
+    });
   });
 
   // ---------------------------------------------------------------------------

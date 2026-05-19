@@ -16,14 +16,35 @@ export interface RunningServer {
   host: string;
   port: number;
   close(): Promise<void>;
+  /**
+   * REL-09: Update the participant-cookie `Secure` flag after the transport
+   * has finished starting. Used by `startSession` once the active transport's
+   * `secureCookie` advisory is known (boot-order rationale: HTTP boots BEFORE
+   * `transport.start()` can run because the transport needs the local port).
+   */
+  setSecureCookie(secure: boolean): void;
 }
 
 export async function startHttpServer(args: {
   manager: SessionManager;
   listen: ListenOpts;
   staticDir?: string;
+  /**
+   * REL-09 / D-13 / D-16: Whether participant cookies should carry `Secure`.
+   * Wired from the active transport's `TransportInfo.secureCookie` advisory.
+   * Defaults to `false` (LAN-safe) when omitted. May be flipped via
+   * `RunningServer.setSecureCookie()` after the transport completes start.
+   */
+  secureCookie?: boolean;
 }): Promise<RunningServer> {
-  const app = buildApp({ manager: args.manager });
+  // Mutable closure-captured value so we can flip the Secure flag after the
+  // transport has resolved its advisory (the HTTP server boots first because
+  // the transport needs the local port).
+  let secureCookieFlag = args.secureCookie ?? false;
+  const app = buildApp({
+    manager: args.manager,
+    secureCookie: () => secureCookieFlag,
+  });
   const wsRouter = createWsRouter({ manager: args.manager });
   const { upgradeWebSocket, injectWebSocket } = createNodeWebSocket({ app });
 
@@ -99,15 +120,22 @@ export async function startHttpServer(args: {
   // `url` is for in-process callers (tests, MCP layer). When the server is
   // bound to the wildcard, fetching `http://0.0.0.0` is non-portable, so we
   // hand out a loopback URL while keeping `host` as the actual bind address.
+  // For IPv6 binds (e.g. `::1` via SHARED_BRAINSTORM_BIND), the URL must
+  // bracket the address per RFC 3986 §3.2.2.
   const clientHost = args.listen.host === '0.0.0.0' ? '127.0.0.1' : args.listen.host;
+  const isIpv6 = clientHost.includes(':');
+  const hostInUrl = isIpv6 ? `[${clientHost}]` : clientHost;
 
   return {
-    url: `http://${clientHost}:${actualPort}`,
+    url: `http://${hostInUrl}:${actualPort}`,
     host: args.listen.host,
     port: actualPort,
     close: async () => {
       wsRouter.closeAll('session_ended');
       await new Promise<void>((res) => server.close(() => res()));
+    },
+    setSecureCookie: (secure: boolean) => {
+      secureCookieFlag = secure;
     },
   };
 }

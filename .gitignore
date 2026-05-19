@@ -15,6 +15,7 @@ packages/server/dist/public/
 *.tsbuildinfo
 docs
 tasks
+.planning
 
 # Build artifacts copied into packages/server/ by scripts/prepack.mjs.
 # These are reassembled on every `npm publish`; tracking them in git would

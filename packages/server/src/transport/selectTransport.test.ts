@@ -1,7 +1,56 @@
-import { describe, expect, it } from 'vitest';
-import { selectTransport, validateBindOverride } from './selectTransport.js';
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
+import {
+  detectCloudflaredVersion,
+  selectTransport,
+  validateBindOverride,
+} from './selectTransport.js';
 import { LanTransport } from './LanTransport.js';
 import { CloudflaredTransport } from './CloudflaredTransport.js';
+import type { SpawnFn } from './CloudflaredTransport.js';
+
+// ---------------------------------------------------------------------------
+// Fake-process helper for `cloudflared --version --short` probing.
+// ---------------------------------------------------------------------------
+
+interface VersionProcOpts {
+  stdoutLines?: string[];
+  exitCode?: number | null;
+  exitDelayMs?: number;
+}
+
+function makeVersionProc(opts: VersionProcOpts): ChildProcess {
+  const emitter = new EventEmitter();
+  const stdout = opts.stdoutLines
+    ? Readable.from(opts.stdoutLines.map((l) => l + '\n'))
+    : Readable.from([]);
+  const fake = Object.assign(emitter, {
+    pid: 88000,
+    exitCode: null as number | null,
+    killed: false,
+    stdin: null,
+    stdout,
+    stderr: null,
+    kill: vi.fn(() => {
+      fake.killed = true;
+      return true;
+    }),
+  });
+  if (opts.exitCode !== undefined) {
+    const exitCode = opts.exitCode;
+    setTimeout(() => {
+      fake.exitCode = exitCode;
+      emitter.emit('exit', exitCode, null);
+    }, opts.exitDelayMs ?? 5);
+  }
+  return fake as unknown as ChildProcess;
+}
+
+function makeVersionSpawnFn(proc: ChildProcess): SpawnFn {
+  return (_cmd: string, _args: readonly string[], _opts: SpawnOptions): ChildProcess => proc;
+}
 
 /**
  * selectTransport / validateBindOverride tests — REL-08 (Wave-0 gap).
@@ -184,5 +233,178 @@ describe('validateBindOverride — REL-08 / D-17 (corrected)', () => {
   it('returns absent for whitespace-only string (after trim)', () => {
     expect(validateBindOverride('   ')).toEqual({ kind: 'absent' });
     expect(validateBindOverride('\t\n')).toEqual({ kind: 'absent' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2 / 02-05 — REL-11 version detection + D-11 binary-pin via env var
+// ---------------------------------------------------------------------------
+
+describe('detectCloudflaredVersion — REL-11 / D-11', () => {
+  it('returns the trimmed version string when --short prints it and exit is 0', async () => {
+    const proc = makeVersionProc({
+      stdoutLines: ['2025.11.1'],
+      exitCode: 0,
+    });
+    const v = await detectCloudflaredVersion({
+      spawnFn: makeVersionSpawnFn(proc),
+      command: 'cloudflared',
+    });
+    expect(v).toBe('2025.11.1');
+  });
+
+  it('returns null when the probe exits non-zero (e.g. older binary without --short)', async () => {
+    const proc = makeVersionProc({
+      stdoutLines: ['cloudflared: unknown flag --short'],
+      exitCode: 2,
+    });
+    const v = await detectCloudflaredVersion({
+      spawnFn: makeVersionSpawnFn(proc),
+    });
+    expect(v).toBeNull();
+  });
+
+  it('returns null when the probe hangs past timeoutMs (5s default → use short override)', async () => {
+    // Build a fake that never exits.
+    const emitter = new EventEmitter();
+    const fake = Object.assign(emitter, {
+      pid: 88001,
+      exitCode: null as number | null,
+      killed: false,
+      stdin: null,
+      stdout: Readable.from([]),
+      stderr: null,
+      kill: vi.fn(() => {
+        fake.killed = true;
+        return true;
+      }),
+    });
+    const spawnFn = makeVersionSpawnFn(fake as unknown as ChildProcess);
+
+    const v = await detectCloudflaredVersion({
+      spawnFn,
+      timeoutMs: 25,
+    });
+    expect(v).toBeNull();
+    // Best-effort kill should have been invoked on timeout.
+    expect(fake.kill).toHaveBeenCalled();
+  });
+
+  it('returns null when the spawn function itself throws synchronously', async () => {
+    const spawnFn: SpawnFn = (() => {
+      throw new Error('ENOENT');
+    }) as SpawnFn;
+    const v = await detectCloudflaredVersion({ spawnFn });
+    expect(v).toBeNull();
+  });
+
+  it('returns null when stdout is empty even though exit is 0', async () => {
+    const proc = makeVersionProc({
+      // No stdout lines at all.
+      exitCode: 0,
+    });
+    const v = await detectCloudflaredVersion({ spawnFn: makeVersionSpawnFn(proc) });
+    expect(v).toBeNull();
+  });
+});
+
+describe('selectTransport — version detection + npx-fallback pinning (REL-11 / D-11)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('logs the detected version when cloudflared is on PATH', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const proc = makeVersionProc({
+      stdoutLines: ['2025.11.1'],
+      exitCode: 0,
+    });
+
+    const t = await selectTransport({
+      isOnPath: async (cmd) => cmd === 'cloudflared',
+      spawnFn: makeVersionSpawnFn(proc),
+    });
+
+    expect(t).toBeInstanceOf(CloudflaredTransport);
+    const banner = warnSpy.mock.calls.find(
+      (c) =>
+        typeof c[0] === 'string' &&
+        /cloudflared detected on PATH: version=2025\.11\.1/.test(c[0]),
+    );
+    expect(banner).toBeDefined();
+  });
+
+  it('logs version=unknown when --version --short fails (older cloudflared)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const proc = makeVersionProc({
+      exitCode: 2,
+    });
+
+    await selectTransport({
+      isOnPath: async (cmd) => cmd === 'cloudflared',
+      spawnFn: makeVersionSpawnFn(proc),
+    });
+
+    const banner = warnSpy.mock.calls.find(
+      (c) =>
+        typeof c[0] === 'string' &&
+        /cloudflared detected on PATH: version=unknown/.test(c[0]),
+    );
+    expect(banner).toBeDefined();
+  });
+
+  it('does NOT probe --version on the npx-fallback path (would trigger npm fetch)', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Track whether `spawnFn` was invoked. If selectTransport probed --version
+    // on the npx path, this would fire and we'd see a call. We assert ZERO.
+    const spawnFn = vi.fn((): ChildProcess => {
+      throw new Error('spawn should not be invoked on npx-fallback path');
+    });
+
+    const t = await selectTransport({
+      isOnPath: async (cmd) => cmd === 'npx',
+      spawnFn: spawnFn as unknown as SpawnFn,
+    });
+
+    expect(t).toBeInstanceOf(CloudflaredTransport);
+    expect(spawnFn).not.toHaveBeenCalled();
+
+    // The fallback banner is logged with the pinned version.
+    const banner = warnSpy.mock.calls.find(
+      (c) =>
+        typeof c[0] === 'string' &&
+        /cloudflared via npx fallback/.test(c[0]) &&
+        /2025\.11\.1/.test(c[0]),
+    );
+    expect(banner).toBeDefined();
+  });
+
+  it('npx-fallback CloudflaredTransport is constructed with CLOUDFLARED_VERSION env pin (D-11)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const t = await selectTransport({
+      isOnPath: async (cmd) => cmd === 'npx',
+    });
+
+    expect(t).toBeInstanceOf(CloudflaredTransport);
+    const env = (t as CloudflaredTransport)._getSpawnEnv();
+    expect(env).toBeDefined();
+    expect(env!.CLOUDFLARED_VERSION).toBe('2025.11.1');
+    // Must merge with process.env — verify a well-known key is preserved.
+    expect(env!.PATH).toBe(process.env.PATH);
+  });
+
+  it('system cloudflared on PATH does NOT receive a spawnEnv (respects user install — D-11)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const proc = makeVersionProc({ stdoutLines: ['2025.11.1'], exitCode: 0 });
+
+    const t = await selectTransport({
+      isOnPath: async (cmd) => cmd === 'cloudflared',
+      spawnFn: makeVersionSpawnFn(proc),
+    });
+
+    expect(t).toBeInstanceOf(CloudflaredTransport);
+    expect((t as CloudflaredTransport)._getSpawnEnv()).toBeUndefined();
   });
 });

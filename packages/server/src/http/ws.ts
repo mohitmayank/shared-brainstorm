@@ -231,23 +231,23 @@ export function createWsRouter({
             // flag fixed at WS upgrade time from sb_c cookie.
             if (!isCoordinator) return;
             if (c.state === 'start') {
-              // Phase 6 (BATCH-01): look up the specific ticket across all open questions.
-              // T-05-10: only transition to 'choosing' when the specified ticket exists
-              // and its question is in 'broadcast' status. Stale ticket_ids (from resolved/
-              // cancelled questions) find nothing → silent return.
-              const q = manager.sessionView().questions.find((q) => q.ticket_id === c.ticket_id);
-              if (!q || q.status !== 'broadcast') return;
-              manager.setSessionStatus('choosing');
-              manager.broadcastEphemeral({
-                type: 'presence',
-                payload: { actor_kind: 'coordinator', activity: 'picking' },
-              });
-            } else {
-              // Phase 6: check if any open question remains in 'broadcast' status
-              // (not just the first question as before)
-              if (manager.sessionView().questions.some((q) => q.status === 'broadcast')) {
-                manager.setSessionStatus('question_open');
+              // WR-01 / WR-03: delegate to setPickingTicket() which validates the
+              // ticket is still open before entering 'choosing'. Stale ticket_ids
+              // (resolved/cancelled questions) are silently ignored by setPickingTicket,
+              // which returns early without changing session_status — so we broadcast
+              // picking presence ONLY when the session actually transitioned to 'choosing'
+              // (T-05-10 race-condition guard: no presence broadcast for stale tickets).
+              manager.setPickingTicket(c.ticket_id);
+              if (manager.sessionView().session_status === 'choosing') {
+                manager.broadcastEphemeral({
+                  type: 'presence',
+                  payload: { actor_kind: 'coordinator', activity: 'picking' },
+                });
               }
+            } else {
+              // WR-01 / WR-03: clear the picking state; setPickingTicket(null) derives
+              // the correct new status (question_open / waiting) automatically.
+              manager.setPickingTicket(null);
               manager.broadcastEphemeral({
                 type: 'presence',
                 payload: { actor_kind: 'coordinator', activity: 'idle' },
@@ -263,6 +263,12 @@ export function createWsRouter({
         handle,
         close: () => {
           subs.delete(sub);
+          // WR-03: coordinator disconnect clears any in-progress pick so the
+          // 'choosing' caption never sticks on participant screens after the tab
+          // closes or the network drops mid-pick.
+          if (isCoordinator) {
+            try { manager.setPickingTicket(null); } catch { /* session may be gone */ }
+          }
         },
       };
     },

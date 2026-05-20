@@ -104,7 +104,7 @@ export function QuestionCard({ question, me, participants, onTyping }: Props) {
 
   return (
     <div className="card">
-      <h2>Current question</h2>
+      <h2>Question</h2>
       <p style={{ marginBottom: '.5rem' }}>{question.text}</p>
 
       {question.status === 'broadcast' && (

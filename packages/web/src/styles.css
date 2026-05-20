@@ -339,3 +339,11 @@ ul.suggestions li, ul.comments li {
   color: var(--text-muted);
   margin-top: .5rem;
 }
+
+/* ----- Phase 6: Batch Questions ----------------------------------------
+   The multi-question wrapper is a zero-box layout passthrough so the N cards
+   stack in normal document flow exactly as the single card did (no new gap
+   token — each `.card` already carries its own margin). */
+.batch-question-list {
+  display: contents;
+}

@@ -115,6 +115,14 @@ test('batch two questions: participant answers Q2 before Q1; coordinator resolve
       'Resolve each question independently',
     );
 
+    // Before any submissions: coordinator sees 0/1 answered on both cards
+    await expect(
+      coordinator.getByTestId(`batch-progress-${q1ticket.question_id}`),
+    ).toContainText('0/1 answered', { timeout: 10_000 });
+    await expect(
+      coordinator.getByTestId(`batch-progress-${q2ticket.question_id}`),
+    ).toContainText('0/1 answered', { timeout: 10_000 });
+
     // Participant submits answer to Q2 first (not Q1)
     // Find the Q2 card by locating the text "What is Q2?" and then getting the input within it
     const q2Card = participant.locator('.card', { hasText: 'What is Q2?' });
@@ -127,6 +135,23 @@ test('batch two questions: participant answers Q2 before Q1; coordinator resolve
     );
     await expect(coordinatorQ2Card.getByText(/Answer for Q2/)).toBeVisible({ timeout: 10_000 });
 
+    // After Q2 submission: progress updates on both views
+    // Coordinator sees 1/1 answered on Q2 card with participant name
+    await expect(
+      coordinator.getByTestId(`batch-progress-${q2ticket.question_id}`),
+    ).toContainText('1/1 answered', { timeout: 10_000 });
+    await expect(
+      coordinator.getByTestId(`batch-progress-${q2ticket.question_id}`),
+    ).toContainText('Alice', { timeout: 10_000 });
+    // Participant sees 1 answered on Q2 card
+    await expect(
+      participant.getByTestId(`batch-progress-${q2ticket.question_id}`),
+    ).toContainText('1 answered', { timeout: 10_000 });
+    // Q1 still shows 0/1 answered on coordinator
+    await expect(
+      coordinator.getByTestId(`batch-progress-${q1ticket.question_id}`),
+    ).toContainText('0/1 answered', { timeout: 10_000 });
+
     // Coordinator resolves Q2 (out of order — Q1 still open)
     await coordinatorQ2Card.getByRole('radio').first().check();
     await coordinatorQ2Card.getByTestId('coordinator-record-suggestion').click();
@@ -134,6 +159,14 @@ test('batch two questions: participant answers Q2 before Q1; coordinator resolve
     // Q2 resolves: decision appears in the Decisions panel (question_resolved removes
     // Q2 from questions[] and adds it to decisions[]; the card folds into decisions)
     await expect(coordinator.getByText(/Answer for Q2/)).toBeVisible({ timeout: 10_000 });
+
+    // Q2 progress element is gone (resolved card no longer shows the progress line)
+    await expect(
+      coordinator.getByTestId(`batch-progress-${q2ticket.question_id}`),
+    ).not.toBeAttached({ timeout: 10_000 });
+    await expect(
+      participant.getByTestId(`batch-progress-${q2ticket.question_id}`),
+    ).not.toBeAttached({ timeout: 10_000 });
 
     // Q1 card is still present and still has its submit form (unaffected by Q2 resolution)
     const coordinatorQ1Card = coordinator.getByTestId(

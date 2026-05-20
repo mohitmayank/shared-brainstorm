@@ -30,6 +30,7 @@ interface CoordinatorQuestionCardProps {
  */
 export function CoordinatorQuestionCard({
   question,
+  participants,
   participantName,
   selectedSuggestionId,
   overrideText,
@@ -51,6 +52,33 @@ export function CoordinatorQuestionCard({
     >
       <h2>Question</h2>
       <p style={{ marginBottom: '.5rem' }}>{question.text}</p>
+
+      {question.status === 'broadcast' &&
+        (() => {
+          const answeredParticipants = [
+            ...new Map(question.suggestions.map((s) => [s.participant_id, s])).values(),
+          ];
+          const approvedCount = participants.filter((p) => p.status === 'approved').length;
+          const names = answeredParticipants
+            .slice(0, 3)
+            .map((s) => participantName(s.participant_id));
+          const overflow = Math.max(0, answeredParticipants.length - 3);
+          const nameStr =
+            overflow > 0 ? `${names.join(', ')} +${overflow} more` : names.join(', ');
+          return (
+            <p
+              className="muted batch-progress"
+              data-testid={`batch-progress-${question.id}`}
+              role="status"
+              aria-live="polite"
+              style={{ marginBottom: '.25rem' }}
+            >
+              {answeredParticipants.length === 0
+                ? `0/${approvedCount} answered — waiting on participants`
+                : `${answeredParticipants.length}/${approvedCount} answered — ${nameStr}`}
+            </p>
+          );
+        })()}
 
       {question.recommendation && (
         <p className="muted" style={{ marginBottom: '.5rem' }}>

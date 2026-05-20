@@ -107,6 +107,18 @@ export function QuestionCard({ question, me, participants, onTyping }: Props) {
       <h2>Current question</h2>
       <p style={{ marginBottom: '.5rem' }}>{question.text}</p>
 
+      {question.status === 'broadcast' && (
+        <p
+          className="muted batch-progress"
+          data-testid={`batch-progress-${question.id}`}
+          role="status"
+          aria-live="polite"
+          style={{ marginBottom: '.25rem' }}
+        >
+          {new Set(question.suggestions.map((s) => s.participant_id)).size} answered
+        </p>
+      )}
+
       {question.recommendation && (
         <p className="muted" style={{ marginBottom: '.5rem' }}>
           AI recommendation: {question.recommendation}

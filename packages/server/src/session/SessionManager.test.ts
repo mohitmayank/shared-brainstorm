@@ -617,12 +617,13 @@ describe('SessionManager', () => {
         mgr.kickParticipant(p.id);
         const view = mgr.sessionView();
         expect(view.participants[0]!.status).toBe('kicked');
-        const changed = events.filter(
-          (e) => e.type === 'participant_status_changed' && e.payload.status === 'kicked',
-        );
-        expect(changed).toHaveLength(1);
-        if (changed[0] && changed[0].type === 'participant_status_changed') {
-          const ev = changed[0] as { type: string; payload: { participant_id: string; status: string } };
+        // approveParticipant emits one event, then kickParticipant emits one more
+        const changed = events.filter((e) => e.type === 'participant_status_changed');
+        // The last changed event is for 'kicked'
+        const kickedEvt = changed[changed.length - 1];
+        expect(kickedEvt).toBeDefined();
+        if (kickedEvt && kickedEvt.type === 'participant_status_changed') {
+          const ev = kickedEvt as { type: string; payload: { participant_id: string; status: string } };
           expect(ev.payload.participant_id).toBe(p.id);
           expect(ev.payload.status).toBe('kicked');
         }
@@ -639,9 +640,13 @@ describe('SessionManager', () => {
         mgr.approveParticipant(p.id);
         mgr.kickParticipant(p.id);
         mgr.kickParticipant(p.id); // second call is no-op
-        const kicked = events.filter(
-          (e) => e.type === 'participant_status_changed' && e.payload.status === 'kicked',
-        );
+        // approveParticipant + kickParticipant = 2 events total; second kick is a no-op
+        const statusChanged = events.filter((e) => e.type === 'participant_status_changed');
+        const kicked = statusChanged.filter((e) => {
+          if (e.type !== 'participant_status_changed') return false;
+          const ev = e as { type: string; payload: { status: string } };
+          return ev.payload.status === 'kicked';
+        });
         expect(kicked).toHaveLength(1);
       } finally {
         cleanup();

@@ -1,11 +1,8 @@
-// COORD-01 + COORD-03 (suggestion path), proven end-to-end through a real
-// browser. Two contexts in one test (workers:1 is mandatory — see
-// e2e/playwright.config.ts): a participant tab joins via the Join form, and a
-// coordinator tab opens `?role=coordinator&token=X` and reaches the coordinator
-// page WITHOUT ever touching the Join form. The participant's suggestion shows
-// up live in the coordinator view; clicking "Record this" resolves the question
-// and unblocks the in-process awaitAnswer long-poll — the same contract the CLI
-// path satisfies. Both tabs then observe the resolved state.
+// COORD-01 + COORD-03 (suggestion path) + JOIN-04 (kick) + JOIN-03 (lock):
+// end-to-end through a real browser. Two contexts in each test (workers:1 is
+// mandatory — see e2e/playwright.config.ts): a participant tab joins via the
+// Join form, and a coordinator tab opens `?role=coordinator&token=X` and
+// reaches the coordinator page WITHOUT ever touching the Join form.
 
 import { test, expect } from './fixtures.js';
 import { askGroup, awaitAnswer } from '../packages/server/src/mcp/tools.js';
@@ -103,4 +100,95 @@ test('coordinator flow: participant suggestion → Record this → awaitAnswer u
   }
 
   // NOTE: Do NOT call stopSession() — the fixture's finally block owns teardown.
+});
+
+test('kick flow: coordinator kicks participant → participant sees join-removed screen', async ({
+  session,
+  browser,
+}) => {
+  test.setTimeout(30_000);
+
+  const participantCtx = await browser.newContext();
+  const coordinatorCtx = await browser.newContext();
+  const participant = await participantCtx.newPage();
+  const coordinator = await coordinatorCtx.newPage();
+
+  try {
+    // Coordinator opens first to be ready to approve
+    await coordinator.goto(session.coordinator_url);
+    await expect(coordinator.getByTestId('coordinator-page')).toBeVisible({ timeout: 10_000 });
+
+    // Participant joins
+    await participant.goto(session.public_url);
+    await expect(participant.getByLabel(/display name/i)).toBeVisible();
+    await participant.getByLabel(/display name/i).fill('Dave');
+    await participant.getByRole('button', { name: /^continue$/i }).click();
+
+    // Participant is pending — sees waiting screen
+    await expect(participant.getByTestId('join-waiting')).toBeVisible({ timeout: 10_000 });
+
+    // Coordinator sees Dave in pending roster; click Approve
+    await expect(
+      coordinator.getByRole('button', { name: /approve dave/i }),
+    ).toBeVisible({ timeout: 10_000 });
+    await coordinator.getByRole('button', { name: /approve dave/i }).click();
+
+    // Participant is now approved — sees the join-empty-cta
+    await expect(participant.getByTestId('join-empty-cta')).toBeVisible({ timeout: 10_000 });
+
+    // Coordinator clicks Kick button for Dave
+    await expect(
+      coordinator.getByRole('button', { name: /kick dave from the session/i }),
+    ).toBeVisible({ timeout: 10_000 });
+    await coordinator.getByRole('button', { name: /kick dave from the session/i }).click();
+
+    // Participant sees the removed screen
+    await expect(participant.getByTestId('join-removed')).toBeVisible({ timeout: 10_000 });
+    await expect(participant.getByText(/you were removed from this session/i)).toBeVisible();
+  } finally {
+    await participantCtx.close();
+    await coordinatorCtx.close();
+  }
+});
+
+test('lock flow: coordinator locks session → new participant sees join-locked screen', async ({
+  session,
+  browser,
+}) => {
+  test.setTimeout(30_000);
+
+  const coordinatorCtx = await browser.newContext();
+  const newParticipantCtx = await browser.newContext();
+  const coordinator = await coordinatorCtx.newPage();
+  const newParticipant = await newParticipantCtx.newPage();
+
+  try {
+    // Coordinator opens and locks the session
+    await coordinator.goto(session.coordinator_url);
+    await expect(coordinator.getByTestId('coordinator-page')).toBeVisible({ timeout: 10_000 });
+
+    // Lock the room via the Lock toggle button
+    await expect(
+      coordinator.getByRole('button', { name: /lock room/i }),
+    ).toBeVisible({ timeout: 10_000 });
+    await coordinator.getByRole('button', { name: /lock room/i }).click();
+
+    // Verify the toggle label flips to "Unlock room"
+    await expect(
+      coordinator.getByRole('button', { name: /unlock room/i }),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // New participant tries to join the locked session
+    await newParticipant.goto(session.public_url);
+    await expect(newParticipant.getByLabel(/display name/i)).toBeVisible();
+    await newParticipant.getByLabel(/display name/i).fill('Eve');
+    await newParticipant.getByRole('button', { name: /^continue$/i }).click();
+
+    // New participant sees the locked screen
+    await expect(newParticipant.getByTestId('join-locked')).toBeVisible({ timeout: 10_000 });
+    await expect(newParticipant.getByText(/this session is locked/i)).toBeVisible();
+  } finally {
+    await coordinatorCtx.close();
+    await newParticipantCtx.close();
+  }
 });

@@ -226,7 +226,6 @@ export function Coordinator({ session, roomLocked }: CoordinatorProps) {
           {session.participants.filter((p) => p.status === 'approved').map((p) => (
             <div key={p.id} className="coordinator-roster-approved">
               <span className="participant">{p.display_name}</span>
-              {/* TODO: Plan 04-03 — Kick button */}
               <button
                 type="button"
                 className="coordinator-roster-kick"
@@ -235,6 +234,12 @@ export function Coordinator({ session, roomLocked }: CoordinatorProps) {
               >
                 Kick
               </button>
+            </div>
+          ))}
+          {session.participants.filter((p) => p.status === 'kicked').map((p) => (
+            <div key={p.id} className="coordinator-roster-kicked">
+              <span className="participant muted">{p.display_name}</span>
+              <span className="muted"> removed</span>
             </div>
           ))}
         </div>

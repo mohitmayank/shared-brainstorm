@@ -43,6 +43,12 @@ const CoordinatorJoinBody = z.object({
   token: z.string().min(1).max(64),
 });
 
+const CoordinatorAnswerBody = z.object({
+  ticket_id: z.string(),
+  value: z.string().min(1).max(2000),
+  source: z.enum(['suggestion', 'synthesis', 'override']),
+});
+
 /**
  * REL-07 / D-06: type-narrowing guard for cap errors thrown by SessionManager.
  * Cap errors carry a string `code` starting with `cap_exceeded` and a numeric
@@ -143,13 +149,11 @@ export function buildApp({
   };
 
   /**
-   * Gates the coordinator-only routes (the answer endpoint lands in Slice 4;
-   * this middleware is declared here but NOT mounted on any route in this
-   * plan). Compares the `sb_c` cookie against the active session's coordinator
+   * Gates the coordinator-only routes (mounted on `POST /api/coordinator/answer`
+   * below). Compares the `sb_c` cookie against the active session's coordinator
    * token using `node:crypto.timingSafeEqual` behind a length pre-check so the
    * compare never throws on mismatched buffer lengths (cross-cutting concern 3).
    */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const requireCoordinator: MiddlewareHandler<AppEnv> = async (c, next) => {
     const cookie = readCoordinatorCookie(c);
     if (!cookie) return c.json({ error: 'not_coordinator' }, 401);
@@ -193,6 +197,45 @@ export function buildApp({
     }
     setCoordinatorCookie(c, supplied, { secure: resolveSecure() });
     return c.json({ ok: true });
+  });
+
+  // COORD-03 backend: the coordinator picks the final answer from the browser.
+  // Gated by `requireCoordinator` (sb_c cookie). NOT rate-limited — privileged
+  // endpoint (RESEARCH §"Rate limiting"). Reuses the already-public
+  // `SessionManager.recordAnswer` 1:1 — the exact code path the MCP
+  // `recordAnswer` tool uses — so the AI host's `awaitAnswer` long-poll unblocks
+  // through the same TicketStore wakeup as the CLI (COORD-04, no regression).
+  // The `source: 'override'` value is trusted initiator input and is NOT
+  // redacted (CONTEXT §Specifics).
+  app.post('/api/coordinator/answer', requireCoordinator, async (c) => {
+    const parsed = CoordinatorAnswerBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid' }, 400);
+    let cq: ReturnType<typeof manager.sessionView>['current_question'];
+    try {
+      cq = manager.sessionView().current_question;
+    } catch {
+      // Session torn down between the cookie gate and this read.
+      return c.json({ error: 'session_ended' }, 404);
+    }
+    if (!cq || cq.ticket_id !== parsed.data.ticket_id) {
+      return c.json({ error: 'ticket_not_current' }, 404);
+    }
+    try {
+      manager.recordAnswer({
+        question_id: cq.id as QuestionId,
+        value: parsed.data.value,
+        source: parsed.data.source,
+      });
+      return c.json({ ok: true });
+    } catch (e) {
+      const msg = (e as Error).message;
+      // Double-resolve race (Pitfall 4): a second pick for an already-resolved
+      // question maps to 409, never a 500.
+      if (msg.includes('no matching') || msg.includes('not broadcast')) {
+        return c.json({ error: 'already_resolved' }, 409);
+      }
+      throw e;
+    }
   });
 
   app.get('/api/session', requireParticipant, (c) => c.json(manager.sessionView()));

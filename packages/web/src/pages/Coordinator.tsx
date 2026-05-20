@@ -3,11 +3,14 @@ import type { WireSession, WireParticipant, WireSuggestion } from '../state.js';
 import { postCoordinatorAnswer, postApprove, postKick, postLock } from '../lib/api.js';
 import { DecisionsPanel } from '../components/coordinator/DecisionsPanel.js';
 import { CoordinatorQuestionCard } from '../components/coordinator/CoordinatorQuestionCard.js';
+import { SessionStatusPill } from '../components/SessionStatusPill.js';
 
 interface CoordinatorProps {
   session: WireSession;
   isCoordinator: true; // gate enforced upstream in App.tsx
   roomLocked: boolean;
+  sessionStatus: 'waiting' | 'question_open' | 'choosing' | 'done';
+  onPicking: (ticketId: string, state: 'start' | 'stop') => void;
 }
 
 /** Per-ticket pick UI state (UI-SPEC Per-Component Contract). */
@@ -45,7 +48,7 @@ function nameFor(participants: WireParticipant[], id: string): string {
  * flips to resolved purely from the incoming `question_resolved` WS event
  * (handled by the reducer) — this component only drives the POST + error copy.
  */
-export function Coordinator({ session, roomLocked }: CoordinatorProps) {
+export function Coordinator({ session, roomLocked, sessionStatus, onPicking }: CoordinatorProps) {
   const q = session.current_question;
   const [cards, setCards] = useState<Record<string, CardState>>({});
 
@@ -112,6 +115,7 @@ export function Coordinator({ session, roomLocked }: CoordinatorProps) {
       source: 'suggestion' | 'override',
     ): Promise<void> => {
       patchCard(ticketId, { recording: true, error: null });
+      onPicking(ticketId, 'start'); // PRES-03: signal 'choosing' status to participants
       try {
         await postCoordinatorAnswer({ ticket_id: ticketId, value, source });
         // WR-03: leave `recording: true` on success so the `question_resolved`
@@ -135,6 +139,8 @@ export function Coordinator({ session, roomLocked }: CoordinatorProps) {
         // WR-02/WR-03: supersede any prior timer for this ticket before
         // scheduling, store the handle so it can be cleared on unmount/resolve,
         // and self-evict the map entry when the timer fires.
+        // onPicking 'stop' is NOT sent on success — recordAnswer transitions
+        // the session status server-side via session_status_changed event.
         clearFallbackTimer(ticketId);
         fallbackTimers.current.set(
           ticketId,
@@ -144,6 +150,7 @@ export function Coordinator({ session, roomLocked }: CoordinatorProps) {
           }, RECORD_FALLBACK_REENABLE_MS),
         );
       } catch (e: unknown) {
+        onPicking(ticketId, 'stop'); // PRES-03: clear 'choosing' on failure so participants aren't stuck
         const status = (e as { status?: number }).status;
         const msg =
           status === 409
@@ -152,7 +159,7 @@ export function Coordinator({ session, roomLocked }: CoordinatorProps) {
         patchCard(ticketId, { recording: false, error: msg });
       }
     },
-    [patchCard, clearFallbackTimer],
+    [patchCard, clearFallbackTimer, onPicking],
   );
 
   const onRecordSuggestion = useCallback(
@@ -205,6 +212,7 @@ export function Coordinator({ session, roomLocked }: CoordinatorProps) {
     <main aria-label="Coordinator view" data-testid="coordinator-page">
       <div className="card coordinator-header">
         <h1>shared-brainstorm — coordinator</h1>
+        <SessionStatusPill status={sessionStatus} />
         <p className="muted" style={{ marginBottom: '.5rem' }}>
           {session.brief}
         </p>

@@ -1,5 +1,6 @@
 import { useReducer, useCallback, useEffect, useRef, useState } from 'react';
 import { reduce, initialState } from './state.js';
+import type { PresenceExpireAction } from './state.js';
 import {
   getName,
   setName,
@@ -112,6 +113,9 @@ export function App() {
   const [state, dispatch] = useReducer(reduce, initialState);
   const wsRef = useRef<WsHandle | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Phase 5 (PRES-02): per-actor presence expiry timers. Keyed by actor_id or
+  // '__coordinator'. Mirrors the fallbackTimers pattern in Coordinator.tsx.
+  const presenceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const [joinError, setJoinError] = useState<string | null>(null);
   // True when the server returned 423 (coordinator locked the room).
   const [joinLocked, setJoinLocked] = useState(false);
@@ -154,6 +158,25 @@ export function App() {
   useEffect(() => {
     wsRetryCountRef.current = wsRetryCount;
   }, [wsRetryCount]);
+
+  // Phase 5 (PRES-02): clear all presence expiry timers on unmount.
+  useEffect(() => {
+    const timers = presenceTimers.current;
+    return () => {
+      for (const handle of timers.values()) clearTimeout(handle);
+      timers.clear();
+    };
+  }, []);
+
+  // Phase 5 (PRES-02): send typing activity command to server.
+  const sendTyping = useCallback((questionId: string, typingState: 'start' | 'stop') => {
+    wsRef.current?.send(JSON.stringify({ type: 'typing', question_id: questionId, state: typingState }));
+  }, []);
+
+  // Phase 5 (PRES-03): send picking activity command to server.
+  const sendPicking = useCallback((ticketId: string, pickingState: 'start' | 'stop') => {
+    wsRef.current?.send(JSON.stringify({ type: 'picking', ticket_id: ticketId, state: pickingState }));
+  }, []);
 
   // REL-05 / D-20: tracks the URL the user last clicked dismiss on. Pitfall 3:
   // a new `tunnel_url_changed` with a *different* URL replaces
@@ -204,6 +227,31 @@ export function App() {
           setNeedsJoin(false);
           setWsRetryCount(0);
           wsRetryCountRef.current = 0;
+        }
+        // Phase 5 (PRES-02): schedule a TTL sweep for non-idle presence frames.
+        // The 'presence' EphemeralFrame variant is added to the Zod schema in Plan 03;
+        // we use `as unknown` to inspect the type at runtime without a TypeScript error
+        // (the presence handler in the reducer is already in place and handles the frame
+        // when it arrives — this block only sets up the expiry timer).
+        const maybePresence = frame as unknown as {
+          type: string;
+          payload?: { activity?: string; actor_id?: string };
+        };
+        if (
+          maybePresence.type === 'presence' &&
+          maybePresence.payload?.activity !== undefined &&
+          maybePresence.payload.activity !== 'idle'
+        ) {
+          const key = maybePresence.payload.actor_id ?? '__coordinator';
+          const existing = presenceTimers.current.get(key);
+          if (existing !== undefined) clearTimeout(existing);
+          presenceTimers.current.set(
+            key,
+            setTimeout(() => {
+              presenceTimers.current.delete(key);
+              dispatch({ type: 'presence_expired', key } satisfies PresenceExpireAction);
+            }, 4000),
+          );
         }
       },
       onClose: (info: CloseInfo) => {
@@ -424,7 +472,13 @@ export function App() {
         </div>
       )}
       {isCoordinatorView ? (
-        <Coordinator session={state.session!} isCoordinator roomLocked={state.roomLocked} />
+        <Coordinator
+          session={state.session!}
+          isCoordinator
+          roomLocked={state.roomLocked}
+          sessionStatus={state.sessionStatus}
+          onPicking={sendPicking}
+        />
       ) : coordinatorMode && coordinatorStatus === 'invalid' ? (
         <div className="card coordinator-error" data-testid="coordinator-error" role="alert">
           <h1>{coordinatorInvalidMsg.heading}</h1>
@@ -468,7 +522,13 @@ export function App() {
           </div>
         </div>
       ) : hasSession ? (
-        <Session session={state.session!} me={state.me!} />
+        <Session
+          session={state.session!}
+          me={state.me!}
+          sessionStatus={state.sessionStatus}
+          presence={state.presence}
+          onTyping={sendTyping}
+        />
       ) : resuming && !needsJoin ? (
         <div className="card" style={{ marginTop: '2rem' }}>
           <p className="muted">Connecting…</p>

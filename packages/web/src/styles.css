@@ -275,3 +275,67 @@ ul.suggestions li, ul.comments li {
 .coordinator-lock-toggle { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: .25rem .75rem; cursor: pointer; color: var(--text); }
 .coordinator-lock-toggle[aria-pressed='true'] { border-color: var(--accent); }
 .coordinator-roster-kicked { display: flex; align-items: center; gap: .5rem; padding: .25rem .5rem; opacity: 0.6; }
+
+/* ----- Phase 5: Live Presence & Progress --------------------------------
+   All additive on existing tokens. No new color values, no new font-faces.
+   @media (prefers-reduced-motion) is the sole sanctioned exception (see
+   UI-SPEC Animation Policy). */
+
+.session-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  padding: .15rem .5rem;
+  background: var(--surface-2);
+  border-radius: 4px;
+  font-size: .875rem;
+  color: var(--text);
+  margin-bottom: .5rem;
+}
+
+.session-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex-shrink: 0;
+}
+
+.session-status-dot[data-status='done'] {
+  background: var(--text-muted);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .session-status-dot:not([data-status='done']) {
+    animation: pulse 2s ease-in-out infinite;
+  }
+}
+
+.presence-activity-line {
+  display: block;
+  min-height: 1.3125rem; /* 0.875rem × 1.5 line-height — reserved height prevents layout shift */
+  font-size: .875rem;
+  color: var(--text-muted);
+  margin-top: .25rem;
+}
+
+.presence-typing-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: .25rem;
+  vertical-align: middle;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .presence-typing-dot { animation: pulse 1.4s ease-in-out infinite; }
+}
+
+.presence-coordinator-picking {
+  font-size: .875rem;
+  color: var(--text-muted);
+  margin-top: .5rem;
+}

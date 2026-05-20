@@ -7,13 +7,15 @@ interface Props {
   question: WireQuestion;
   me: WireParticipant;
   participants: WireParticipant[];
+  /** Phase 5 (PRES-02): debounced typing notification callback — wired to WS in Plan 03. */
+  onTyping?: (questionId: string, state: 'start' | 'stop') => void;
 }
 
 function nameFor(participants: WireParticipant[], id: string): string {
   return participants.find((p) => p.id === id)?.display_name ?? id;
 }
 
-export function QuestionCard({ question, me, participants }: Props) {
+export function QuestionCard({ question, me, participants, onTyping: _onTyping }: Props) {
   const mySuggestion = question.suggestions.find((s) => s.participant_id === me.id);
   const hasOptions = !!(question.options && question.options.length > 0);
 

@@ -18,6 +18,7 @@ const welcomeEphemeral: AnyFrame = {
       current_question: null,
     },
     you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z' },
+    is_coordinator: false,
   },
 };
 
@@ -29,6 +30,69 @@ describe('reduce — welcome (ephemeral, no seq)', () => {
     expect(next.me).not.toBeNull();
     expect(next.me?.display_name).toBe('Alice');
     expect(next.lastSeq).toBe(-1); // ephemeral welcome must NOT update lastSeq
+  });
+});
+
+describe('reduce — isCoordinator', () => {
+  const sessionShape = {
+    session_id: 'sb_s_001',
+    brief: 'test session',
+    participants: [],
+    decisions: [],
+    current_question: null,
+  };
+
+  const coordinatorWelcome: AnyFrame = {
+    seq: 0,
+    ts: '2026-01-01T00:00:00Z',
+    type: 'welcome',
+    payload: { session: sessionShape, is_coordinator: true },
+  };
+
+  const participantWelcome: AnyFrame = {
+    seq: 0,
+    ts: '2026-01-01T00:00:00Z',
+    type: 'welcome',
+    payload: {
+      session: sessionShape,
+      you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z' },
+      is_coordinator: false,
+    },
+  };
+
+  it('initialState.isCoordinator is false', () => {
+    expect(initialState.isCoordinator).toBe(false);
+  });
+
+  it('sets isCoordinator true and me null for a coordinator welcome (you omitted)', () => {
+    const next = reduce(initialState, coordinatorWelcome);
+    expect(next.isCoordinator).toBe(true);
+    expect(next.me).toBeNull();
+  });
+
+  it('sets isCoordinator false and me set for a participant welcome', () => {
+    const next = reduce(initialState, participantWelcome);
+    expect(next.isCoordinator).toBe(false);
+    expect(next.me?.id).toBe('sb_p_001');
+  });
+
+  it('survives reconnect — a second welcome re-applies the flag with no stale carry-over', () => {
+    const asCoordinator = reduce(initialState, coordinatorWelcome);
+    expect(asCoordinator.isCoordinator).toBe(true);
+    // A reconnect that arrives as a participant must clear the prior coordinator flag.
+    const asParticipant = reduce(asCoordinator, participantWelcome);
+    expect(asParticipant.isCoordinator).toBe(false);
+    expect(asParticipant.me?.id).toBe('sb_p_001');
+  });
+
+  it('ephemeral coordinator welcome also sets isCoordinator true / me null', () => {
+    const ephemeral: AnyFrame = {
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true },
+    };
+    const next = reduce(initialState, ephemeral);
+    expect(next.isCoordinator).toBe(true);
+    expect(next.me).toBeNull();
   });
 });
 

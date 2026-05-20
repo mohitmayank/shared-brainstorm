@@ -4,7 +4,10 @@ import type { AnyFrame, ServerEvent, EphemeralFrame } from '@shared-brainstorm/s
 // with what zod actually parses off the WebSocket (zod uses plain string, not branded types)
 type WelcomePayload = Extract<EphemeralFrame, { type: 'welcome' }>['payload'];
 type WireSession = WelcomePayload['session'];
-type WireParticipant = WelcomePayload['you'];
+// `welcome.you` is now optional (coordinator connections omit it). Keep the
+// exported `WireParticipant` as the non-null participant shape so components
+// that already consume it are unaffected — `UiState.me` carries the nullability.
+type WireParticipant = NonNullable<WelcomePayload['you']>;
 type WireQuestion = NonNullable<WireSession['current_question']>;
 type WireSuggestion = WireQuestion['suggestions'][number];
 type WireComment = WireQuestion['comments'][number];
@@ -45,6 +48,13 @@ export interface UiState {
    * by comparing the dismissed URL against `tunnelBanner.url` at render time.
    */
   tunnelBanner: { url: string } | null;
+  /**
+   * Server-derived (concern #6): set from every `welcome` frame's
+   * `is_coordinator` flag, which the server fixes at WS upgrade time from the
+   * `sb_c` cookie. The UI never sets this itself — it is purely a mirror of the
+   * server's authority and is re-applied on reconnect (no stale carry-over).
+   */
+  isCoordinator: boolean;
 }
 
 export const initialState: UiState = {
@@ -54,6 +64,7 @@ export const initialState: UiState = {
   banner: null,
   transportFailed: null,
   tunnelBanner: null,
+  isCoordinator: false,
 };
 
 function isServerEvent(frame: AnyFrame): frame is ServerEvent {
@@ -89,7 +100,8 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     return {
       ...state,
       session: p.session,
-      me: p.you,
+      me: p.you ?? null,
+      isCoordinator: p.is_coordinator,
       lastSeq: seq,
       banner: null,
     };
@@ -280,7 +292,8 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
     return {
       ...state,
       session: evt.payload.session,
-      me: evt.payload.you,
+      me: evt.payload.you ?? null,
+      isCoordinator: evt.payload.is_coordinator,
       banner: null,
       // NOTE: do NOT update lastSeq — ephemeral welcome has no seq
     };

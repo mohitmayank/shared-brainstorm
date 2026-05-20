@@ -138,6 +138,10 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       isCoordinator: p.is_coordinator,
       // Phase 4: set myStatus from welcome.you.status; do NOT clear if you is absent
       ...(p.you !== undefined ? { myStatus: p.you.status } : {}),
+      // WR-01: project session.locked into roomLocked so a reloaded coordinator/
+      // participant sees the correct lock state immediately without waiting for a
+      // room_locked event that may have aged out of the ring buffer.
+      roomLocked: p.session.locked,
       // Re-prime state but never move the watermark backward; Math.max keeps
       // the WR-07 guard intact against any subsequently-replayed already-
       // applied event (a backward `lastSeq` would re-open duplicate replay for
@@ -358,6 +362,10 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
       isCoordinator: evt.payload.is_coordinator,
       // Phase 4: set myStatus from welcome.you.status; do NOT clear if you is absent
       ...(evt.payload.you !== undefined ? { myStatus: evt.payload.you.status } : {}),
+      // WR-01: project session.locked into roomLocked so a reloaded coordinator/
+      // participant sees the correct lock state immediately without waiting for a
+      // room_locked event that may have aged out of the ring buffer.
+      roomLocked: evt.payload.session.locked,
       banner: null,
       // NOTE: do NOT update lastSeq — ephemeral welcome has no seq
     };

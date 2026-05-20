@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WireSession, WireParticipant, WireSuggestion } from '../state.js';
-import { postCoordinatorAnswer } from '../lib/api.js';
+import { postCoordinatorAnswer, postApprove, postKick, postLock } from '../lib/api.js';
 import { DecisionsPanel } from '../components/coordinator/DecisionsPanel.js';
 import { CoordinatorQuestionCard } from '../components/coordinator/CoordinatorQuestionCard.js';
 
 interface CoordinatorProps {
   session: WireSession;
   isCoordinator: true; // gate enforced upstream in App.tsx
+  roomLocked: boolean;
 }
 
 /** Per-ticket pick UI state (UI-SPEC Per-Component Contract). */
@@ -44,7 +45,7 @@ function nameFor(participants: WireParticipant[], id: string): string {
  * flips to resolved purely from the incoming `question_resolved` WS event
  * (handled by the reducer) — this component only drives the POST + error copy.
  */
-export function Coordinator({ session }: CoordinatorProps) {
+export function Coordinator({ session, roomLocked }: CoordinatorProps) {
   const q = session.current_question;
   const [cards, setCards] = useState<Record<string, CardState>>({});
 
@@ -174,6 +175,30 @@ export function Coordinator({ session }: CoordinatorProps) {
     [cards, record],
   );
 
+  const handleApprove = useCallback(async (participantId: string) => {
+    try {
+      await postApprove({ participant_id: participantId });
+    } catch {
+      // optimistic; WS participant_status_changed confirms the change
+    }
+  }, []);
+
+  const handleKick = useCallback(async (participantId: string) => {
+    try {
+      await postKick({ participant_id: participantId });
+    } catch {
+      // optimistic; WS participant_status_changed confirms the change
+    }
+  }, []);
+
+  const handleLock = useCallback(async (locked: boolean) => {
+    try {
+      await postLock({ locked });
+    } catch {
+      // optimistic; WS room_locked confirms the change
+    }
+  }, []);
+
   const hasContent = q !== null || session.decisions.length > 0;
 
   return (
@@ -183,13 +208,44 @@ export function Coordinator({ session }: CoordinatorProps) {
         <p className="muted" style={{ marginBottom: '.5rem' }}>
           {session.brief}
         </p>
-        <div className="participants">
-          {session.participants.map((p) => (
-            <span key={p.id} className="participant">
-              {p.display_name}
-            </span>
+        <div className="coordinator-roster">
+          {session.participants.filter((p) => p.status === 'pending').map((p) => (
+            <div key={p.id} className="coordinator-roster-pending">
+              <span>{p.display_name}</span>
+              <span className="muted"> wants to join</span>
+              <button
+                type="button"
+                className="coordinator-roster-approve"
+                aria-label={`Approve ${p.display_name}`}
+                onClick={() => void handleApprove(p.id)}
+              >
+                Approve
+              </button>
+            </div>
+          ))}
+          {session.participants.filter((p) => p.status === 'approved').map((p) => (
+            <div key={p.id} className="coordinator-roster-approved">
+              <span className="participant">{p.display_name}</span>
+              {/* TODO: Plan 04-03 — Kick button */}
+              <button
+                type="button"
+                className="coordinator-roster-kick"
+                aria-label={`Kick ${p.display_name} from the session`}
+                onClick={() => void handleKick(p.id)}
+              >
+                Kick
+              </button>
+            </div>
           ))}
         </div>
+        <button
+          type="button"
+          className="coordinator-lock-toggle"
+          aria-pressed={roomLocked}
+          onClick={() => void handleLock(!roomLocked)}
+        >
+          {roomLocked ? '🔓 Unlock room' : '🔒 Lock room'}
+        </button>
       </div>
 
       <DecisionsPanel decisions={session.decisions} />

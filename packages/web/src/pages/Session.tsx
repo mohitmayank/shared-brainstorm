@@ -43,8 +43,13 @@ export function Session({ session, me }: Props) {
       )}
 
       {!activeQuestion && (
-        <div className="card">
-          <p className="muted">Waiting for a question from the AI host…</p>
+        <div className="join-empty-cta card" data-testid="join-empty-cta">
+          <h2>You're in!</h2>
+          <p className="muted">
+            Waiting for the first question… You'll see it here the moment the host posts one.
+          </p>
+          <span className="join-connected-dot" />
+          <span className="muted">Connected</span>
         </div>
       )}
     </>

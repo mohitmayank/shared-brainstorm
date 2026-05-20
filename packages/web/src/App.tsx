@@ -252,7 +252,16 @@ export function App() {
         if (reconnectTimer.current !== null) clearTimeout(reconnectTimer.current);
       };
     }
-    startWs(getLastSeq());
+    // Phase 4 / JOIN-05: if the participant has a remembered display name, auto-
+    // submit the join on mount so they go straight to the waiting-for-approval
+    // screen without having to fill in the form again. The "Not you? Change name"
+    // link in Join.tsx lets them override.
+    const remembered = getName();
+    if (remembered && !joinLocked) {
+      void handleJoin(remembered);
+    } else {
+      startWs(getLastSeq());
+    }
     return () => {
       if (wsRef.current) wsRef.current.close();
       if (reconnectTimer.current !== null) clearTimeout(reconnectTimer.current);
@@ -281,7 +290,10 @@ export function App() {
     [startWs],
   );
 
-  const hasSession = state.session !== null && state.me !== null;
+  // Phase 4: approved participants only. Pending participants have me set but must
+  // see the waiting screen, not the session — require myStatus === 'approved'.
+  const hasSession =
+    state.session !== null && state.me !== null && state.myStatus === 'approved';
   // COORD-01: coordinators connect with no participant identity (me === null),
   // so the participant `hasSession` gate above can never be true for them. Branch
   // on the server-derived `isCoordinator` flag + a live session instead.
@@ -328,7 +340,7 @@ export function App() {
         </div>
       )}
       {isCoordinatorView ? (
-        <Coordinator session={state.session!} isCoordinator />
+        <Coordinator session={state.session!} isCoordinator roomLocked={state.roomLocked} />
       ) : coordinatorMode && coordinatorStatus === 'invalid' ? (
         <div className="card coordinator-error" data-testid="coordinator-error" role="alert">
           <h1>{coordinatorInvalidMsg.heading}</h1>
@@ -337,6 +349,33 @@ export function App() {
       ) : coordinatorMode ? (
         <div className="card" style={{ marginTop: '2rem' }}>
           <p className="muted">Validating coordinator link…</p>
+        </div>
+      ) : state.myStatus === 'kicked' ? (
+        <div className="card" style={{ marginTop: '2rem' }} data-testid="join-removed" role="alert">
+          <h1>You were removed from this session</h1>
+          <p className="muted">
+            The host has removed you from this brainstorm. You can close this tab.
+          </p>
+        </div>
+      ) : state.myStatus === 'pending' ? (
+        <div className="join-waiting card" style={{ marginTop: '2rem' }} data-testid="join-waiting">
+          <h1>Waiting for approval</h1>
+          <p className="muted">
+            Your request to join is with the host. You'll be let in as soon as they approve — keep
+            this tab open.
+          </p>
+          <span className="join-connected-dot" />
+          <span className="muted">Connected</span>
+        </div>
+      ) : joinLocked ? (
+        <div className="card" style={{ marginTop: '2rem' }} data-testid="join-locked">
+          <div className="banner" role="status">
+            <h1>This session is locked</h1>
+            <p className="muted">
+              The host has closed this brainstorm to new participants. Ask them to unlock it if
+              you'd like to join.
+            </p>
+          </div>
         </div>
       ) : hasSession ? (
         <Session session={state.session!} me={state.me!} />
@@ -349,7 +388,6 @@ export function App() {
           defaultName={getName() ?? ''}
           onSubmit={handleJoin}
           error={joinError}
-          locked={joinLocked}
         />
       )}
       <footer className="app-footer">

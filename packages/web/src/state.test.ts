@@ -1146,7 +1146,7 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
     expect(baseState.session?.current_question).toBeNull();
   });
 
-  it('question_resolved for Q2 removes Q2 from questions[]; Q1 stays; decisions gains Q2 entry', () => {
+  it('question_resolved for Q2 marks Q2 resolved in place (flip-then-fold); Q1 stays broadcast; decisions gains Q2', () => {
     const withBoth = reduce(reduce(baseState, q1), q2);
     const resolveQ2: AnyFrame = {
       seq: 20,
@@ -1158,8 +1158,19 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
       },
     };
     const next = reduce(withBoth, resolveQ2);
-    expect(next.session?.questions).toHaveLength(1);
-    expect(next.session?.questions[0]?.id).toBe('sb_q_001');
+    // Phase 6 fix: the resolved question is KEPT in questions[] marked `resolved`
+    // (the card flips in place to "✓ Decided" per UI-SPEC; the participant view
+    // filters status==='broadcast' so it folds into decisions there, and the
+    // coordinator view renders the resolved marker). It is NOT dropped from the array.
+    expect(next.session?.questions).toHaveLength(2);
+    const q2Entry = next.session?.questions.find((q) => q.id === 'sb_q_002');
+    expect(q2Entry?.status).toBe('resolved');
+    expect(q2Entry?.resolution?.value).toBe('Answer for Q2');
+    // Q1 remains broadcast and is the derived current_question (first still-open).
+    const q1Entry = next.session?.questions.find((q) => q.id === 'sb_q_001');
+    expect(q1Entry?.status).toBe('broadcast');
+    expect(next.session?.current_question?.id).toBe('sb_q_001');
+    // The decision is still recorded.
     expect(next.session?.decisions).toHaveLength(1);
     expect(next.session?.decisions[0]?.answer).toBe('Answer for Q2');
     expect(next.session?.decisions[0]?.question_id).toBe('sb_q_002');

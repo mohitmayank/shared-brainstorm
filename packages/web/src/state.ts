@@ -294,14 +294,26 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       resolved !== null
         ? { question_id: resolved.id, question: resolved.text, answer: p.resolution.value }
         : null;
-    const filteredQuestions = state.session.questions.filter((q) => q.id !== p.question_id);
+    // Phase 6 fix: do NOT drop the question from questions[]. Mark it `resolved`
+    // (with its resolution) so the card flips IN PLACE to "✓ Decided: X" per the
+    // UI-SPEC — the Coordinator view .map()s all questions and renders the resolved
+    // marker, while the participant Session view filters to status==='broadcast'
+    // (so it folds into the decisions list there). Filtering it out here made the
+    // resolved card vanish with no marker (Phase 6 regression). current_question
+    // (derived back-compat) tracks the first still-OPEN question, or null.
+    const updatedQuestions = state.session.questions.map((q) =>
+      q.id === p.question_id
+        ? { ...q, status: 'resolved' as const, resolution: p.resolution }
+        : q,
+    );
+    const firstOpen = updatedQuestions.find((q) => q.status === 'broadcast') ?? null;
     return {
       ...state,
       lastSeq: seq,
       session: {
         ...state.session,
-        questions: filteredQuestions,
-        current_question: filteredQuestions[0] ?? null,
+        questions: updatedQuestions,
+        current_question: firstOpen,
         decisions:
           newDecision !== null
             ? [...state.session.decisions, newDecision]

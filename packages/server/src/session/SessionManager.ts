@@ -318,7 +318,7 @@ export class SessionManager {
       payload: { question_id: q.id, resolution: q.resolution },
     });
     a.open_questions.delete(args.question_id); // Phase 6: replaced a.current_question = null
-    this.setSessionStatus(this.deriveSessionStatus()); // Phase 6: derives based on remaining open questions
+    this.setSessionStatus(this.deriveSessionStatus(true)); // recording ends the pick → exit 'choosing'
   }
 
   /**
@@ -335,7 +335,7 @@ export class SessionManager {
       this.emit({ type: 'question_cancelled', payload: { question_id: q.id, reason } });
     }
     a.open_questions.clear();
-    this.setSessionStatus(this.deriveSessionStatus()); // → 'waiting' when map is empty
+    this.setSessionStatus(this.deriveSessionStatus(true)); // cancelling ends any pick → exit 'choosing'
   }
 
   /**
@@ -358,7 +358,7 @@ export class SessionManager {
       });
     }
     a.open_questions.clear();
-    this.setSessionStatus(this.deriveSessionStatus());
+    this.setSessionStatus(this.deriveSessionStatus(true)); // timeout ends any pick → exit 'choosing'
   }
 
   /**
@@ -441,13 +441,17 @@ export class SessionManager {
 
   /**
    * Phase 6 (BATCH-02): derive the aggregate session status from the current
-   * open_questions map. Preserves terminal states (done, choosing) and derives
-   * question_open / waiting from the map size.
+   * open_questions map. `done` is terminal. `choosing` (set by the coordinator
+   * picking handler in ws.ts) is preserved by default so a concurrent askGroup
+   * does not clobber an in-progress pick — but resolving/cancelling/timing-out a
+   * question ENDS that pick, so those callers pass `exitChoosing: true` to drop
+   * back to question_open/waiting (otherwise the "Coordinator is picking" caption
+   * would stick forever after the answer is recorded — Phase 6 regression fix).
    */
-  private deriveSessionStatus(): SessionStatus {
+  private deriveSessionStatus(exitChoosing = false): SessionStatus {
     const a = this.requireActive();
     if (a.session_status === 'done') return 'done'; // terminal — cannot regress
-    if (a.session_status === 'choosing') return 'choosing'; // externally-set only
+    if (a.session_status === 'choosing' && !exitChoosing) return 'choosing';
     if (a.open_questions.size > 0) return 'question_open';
     return 'waiting';
   }

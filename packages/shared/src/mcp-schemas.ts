@@ -8,7 +8,6 @@ export type StartSessionInput = z.infer<typeof StartSessionInput>;
 export const StartSessionOutput = z.object({
   session_id: z.string(),
   public_url: z.string().url(),
-  join_code: z.string().regex(/^\d{6}$/),
   invite_text: z.string(),
   clipboard_copied: z.boolean(),
   // Phase 3 (COORD-01): one-time URL the human initiator opens to drive the

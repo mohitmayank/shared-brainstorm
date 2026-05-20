@@ -4,6 +4,7 @@ const ParticipantSchema = z.object({
   id: z.string(),
   display_name: z.string(),
   joined_at: z.string(),
+  status: z.enum(['pending', 'approved', 'kicked']),
 });
 
 const QuestionOptionSchema = z.object({
@@ -53,6 +54,7 @@ const SessionViewSchema = z.object({
     z.object({ question: z.string(), answer: z.string(), question_id: z.string() }),
   ),
   current_question: QuestionSchema.nullable(),
+  locked: z.boolean(),
 });
 
 const Envelope = <P extends z.ZodTypeAny>(type: string, payload: P) =>
@@ -97,6 +99,14 @@ export const ServerEvent = z.discriminatedUnion('type', [
     }),
   ),
   Envelope('session_ended', z.object({ reason: z.enum(['stop_session', 'signal', 'crash', 'ai_host_disconnected']) })),
+  Envelope(
+    'participant_status_changed',
+    z.object({
+      participant_id: z.string(),
+      status: z.enum(['pending', 'approved', 'kicked']),
+    }),
+  ),
+  Envelope('room_locked', z.object({ locked: z.boolean() })),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
 

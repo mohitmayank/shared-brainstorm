@@ -4,7 +4,6 @@ import {
   newTicketId,
   newQuestionId,
   newParticipantId,
-  newJoinCode,
   newCoordinatorToken,
 } from './ids.js';
 
@@ -32,20 +31,6 @@ describe('id minting', () => {
   });
 });
 
-describe('newJoinCode', () => {
-  it('produces exactly 6 digits, zero-padded', () => {
-    for (let i = 0; i < 50; i++) {
-      const code = newJoinCode();
-      expect(code).toMatch(/^\d{6}$/);
-      expect(code.length).toBe(6);
-    }
-  });
-
-  it('produces varying codes across calls', () => {
-    const codes = new Set(Array.from({ length: 100 }, () => newJoinCode()));
-    expect(codes.size).toBeGreaterThan(50);
-  });
-});
 
 describe('newCoordinatorToken', () => {
   it('mints a 22-character token', () => {

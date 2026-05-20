@@ -26,8 +26,3 @@ export const newParticipantId = (): ParticipantId => mint('sb_p_') as Participan
  */
 export const newCoordinatorToken = (): string => mint('', 22);
 
-export function newJoinCode(): string {
-  // 6-digit numeric, leading zero allowed
-  const n = randomBytes(4).readUInt32BE(0) % 1_000_000;
-  return n.toString().padStart(6, '0');
-}

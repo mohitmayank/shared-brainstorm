@@ -4,6 +4,7 @@ export interface Participant {
   id: ParticipantId;
   display_name: string;
   joined_at: string; // ISO
+  status: 'pending' | 'approved' | 'kicked';
 }
 
 export interface Suggestion {
@@ -47,4 +48,5 @@ export interface SessionView {
   participants: Participant[];
   decisions: { question: string; answer: string; question_id: QuestionId }[];
   current_question: Question | null;
+  locked: boolean;
 }

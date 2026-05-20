@@ -104,11 +104,14 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
   // than the last applied seq makes replay idempotent regardless of how many
   // paths deliver it.
   //
-  // `welcome` is exempt: it is the authoritative full-state resync sent on
-  // every (re)connect and may carry a seq <= the client's current watermark
-  // (a reconnecting client already past the snapshot seq). It must always
-  // re-prime state — and it overwrites `lastSeq` to the snapshot's seq so the
-  // replayed delta that follows is judged against the correct watermark.
+  // `welcome` is exempt from the seq guard so it can always re-prime full
+  // state on (re)connect. In production `welcome` never crosses the wire with
+  // a `seq`: the server sends it as an ephemeral frame (ws.ts) routed through
+  // `applyEphemeralFrame`, which does not touch `lastSeq`. The seq-carrying
+  // `welcome` form only exists in test fixtures (the `ServerEvent` schema
+  // permits it). The exemption here is therefore defensive against that
+  // schema-permitted shape, and the watermark is advanced monotonically below
+  // so a low-seq welcome can never weaken the guard.
   if (type !== 'welcome' && seq <= state.lastSeq) return state;
 
   if (type === 'welcome') {
@@ -118,7 +121,11 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       session: p.session,
       me: p.you ?? null,
       isCoordinator: p.is_coordinator,
-      lastSeq: seq,
+      // Re-prime state but never move the watermark backward; Math.max keeps
+      // the WR-07 guard intact against any subsequently-replayed already-
+      // applied event (a backward `lastSeq` would re-open duplicate replay for
+      // append-style events like `question_resolved`).
+      lastSeq: Math.max(state.lastSeq, seq),
       banner: null,
     };
   }

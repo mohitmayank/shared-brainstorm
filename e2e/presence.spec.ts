@@ -136,15 +136,21 @@ test.describe('presence indicators', () => {
       await participant.getByPlaceholder('Your answer').fill('Option A');
       await participant.getByRole('button', { name: /submit/i }).click();
 
-      // Coordinator selects the suggestion radio and clicks "Record this"
-      // This triggers onPicking('start') → sends 'picking' WS command
+      // Coordinator selects the suggestion radio. This triggers onPicking('start')
+      // → 'picking' WS command → server sets session_status='choosing'. The "picking"
+      // window is exactly between selecting a suggestion and recording it, so the
+      // caption must be asserted HERE, before "Record this" resolves the question
+      // (recordAnswer transitions choosing → resolved, clearing the caption).
       await card.getByRole('radio').first().check();
-      await coordinator.getByTestId('coordinator-record-suggestion').click();
 
-      // Participant sees the "Coordinator is picking" caption
+      // Participant sees the "Coordinator is picking" caption while status is 'choosing'
       const pickingCaption = participant.getByTestId('presence-coordinator-picking');
       await expect(pickingCaption).toBeVisible({ timeout: 10_000 });
       await expect(pickingCaption).toContainText('Coordinator is picking the final answer');
+
+      // Recording the answer ends the picking window — the caption clears.
+      await coordinator.getByTestId('coordinator-record-suggestion').click();
+      await expect(pickingCaption).toBeHidden({ timeout: 10_000 });
     } finally {
       await participantCtx.close();
       await coordinatorCtx.close();

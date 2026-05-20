@@ -97,8 +97,13 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking }: C
   const onSelectSuggestion = useCallback(
     (ticketId: string, suggestionId: string) => {
       patchCard(ticketId, { selectedSuggestionId: suggestionId, error: null });
+      // PRES-03: the coordinator is now actively picking — signal 'choosing' so
+      // participants see "Coordinator is picking the final answer" DURING deliberation,
+      // not just for the few ms of the record() fetch. recordAnswer later resolves the
+      // question (choosing → resolved), which clears the caption.
+      onPicking(ticketId, 'start');
     },
-    [patchCard],
+    [patchCard, onPicking],
   );
 
   const onChangeOverride = useCallback(

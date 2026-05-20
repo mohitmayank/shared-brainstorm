@@ -64,7 +64,14 @@ const Envelope = <P extends z.ZodTypeAny>(type: string, payload: P) =>
   });
 
 export const ServerEvent = z.discriminatedUnion('type', [
-  Envelope('welcome', z.object({ session: SessionViewSchema, you: ParticipantSchema })),
+  Envelope(
+    'welcome',
+    z.object({
+      session: SessionViewSchema,
+      you: ParticipantSchema.optional(),
+      is_coordinator: z.boolean(),
+    }),
+  ),
   Envelope('participant_joined', z.object({ participant: ParticipantSchema })),
   Envelope('participant_left', z.object({ participant_id: z.string() })),
   Envelope('question_broadcast', z.object({ question: QuestionSchema })),
@@ -96,7 +103,11 @@ export type ServerEvent = z.infer<typeof ServerEvent>;
 export const EphemeralFrame = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('welcome'),
-    payload: z.object({ session: SessionViewSchema, you: ParticipantSchema }),
+    payload: z.object({
+      session: SessionViewSchema,
+      you: ParticipantSchema.optional(),
+      is_coordinator: z.boolean(),
+    }),
   }),
   z.object({ type: z.literal('heartbeat') }),
 ]);

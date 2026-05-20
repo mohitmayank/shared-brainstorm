@@ -16,7 +16,7 @@ describe('WS events', () => {
       seq: 0,
       ts: '2026-01-01T00:00:00Z',
       type: 'welcome',
-      payload: { session: sessionShape, you: youShape },
+      payload: { session: sessionShape, you: youShape, is_coordinator: false },
     });
     expect(ok.success).toBe(true);
   });
@@ -83,6 +83,68 @@ describe('WS events', () => {
       value: 'A',
     });
     expect(bad.success).toBe(false);
+  });
+});
+
+describe('welcome — is_coordinator', () => {
+  it('parses a participant welcome (you present, is_coordinator:false)', () => {
+    const ok = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, you: youShape, is_coordinator: false },
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('parses a coordinator welcome (you omitted, is_coordinator:true)', () => {
+    const ok = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true },
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('rejects a welcome missing is_coordinator (field is required)', () => {
+    const bad = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, you: youShape },
+    });
+    expect(bad.success).toBe(false);
+  });
+
+  it('parses an EphemeralFrame coordinator welcome (you omitted, is_coordinator:true)', () => {
+    const ok = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true },
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('rejects an EphemeralFrame welcome missing is_coordinator', () => {
+    const bad = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, you: youShape },
+    });
+    expect(bad.success).toBe(false);
+  });
+
+  it('does not carry a coordinator_token in the welcome payload (no such field)', () => {
+    const parsed = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, coordinator_token: 'leak' },
+    });
+    // Zod strips unknown keys by default; assert the field never survives parse.
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect((parsed.data.payload as Record<string, unknown>).coordinator_token).toBeUndefined();
+    }
   });
 });
 
@@ -156,7 +218,7 @@ describe('EphemeralFrame', () => {
   it('parses welcome frame without seq', () => {
     const ok = EphemeralFrame.safeParse({
       type: 'welcome',
-      payload: { session: sessionShape, you: youShape },
+      payload: { session: sessionShape, you: youShape, is_coordinator: false },
     });
     expect(ok.success).toBe(true);
   });
@@ -173,7 +235,7 @@ describe('AnyFrame', () => {
       seq: 0,
       ts: '2026-01-01T00:00:00Z',
       type: 'welcome',
-      payload: { session: sessionShape, you: youShape },
+      payload: { session: sessionShape, you: youShape, is_coordinator: false },
     });
     expect(ok.success).toBe(true);
   });

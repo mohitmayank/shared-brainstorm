@@ -25,7 +25,8 @@ describe('Full integration: start → join → ask → suggest → record → st
     expect(session.session_id).toMatch(/^sb_s_/);
     expect(session.public_url).toMatch(/^http:\/\//);
     expect(session.join_code).toMatch(/^\d{6}$/);
-    expect('coordinator_url' in session).toBe(false);
+    expect(session.coordinator_url).toMatch(/\?role=coordinator&token=[A-Za-z0-9_-]{22}$/);
+    expect(session.invite_text).not.toContain(session.coordinator_url);
 
     const mgr = mcpState.manager!;
     const app = mcpState.http!;

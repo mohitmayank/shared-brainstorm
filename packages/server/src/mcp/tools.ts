@@ -142,6 +142,7 @@ export async function startSession(
   join_code: string;
   invite_text: string;
   clipboard_copied: boolean;
+  coordinator_url: string;
 }> {
   if (mcpState.manager !== null) {
     throw new Error('A session is already active. Call stopSession first.');
@@ -296,6 +297,17 @@ export async function startSession(
   mcpState.publicUrl = publicUrl;
 
   const invite_text = buildInviteText(publicUrl, join_code);
+
+  // Phase 3 (COORD-01): compose the coordinator URL from the public URL using
+  // the URL API so trailing slashes / pre-existing query strings are handled
+  // correctly. This URL is surfaced as its own return field — it MUST NOT enter
+  // invite_text (auto-copied to clipboard); the MCP host prints it separately.
+  const coordinatorToken = manager.coordinatorToken();
+  const coordinatorUrlObj = new URL(publicUrl);
+  coordinatorUrlObj.searchParams.set('role', 'coordinator');
+  coordinatorUrlObj.searchParams.set('token', coordinatorToken);
+  const coordinator_url = coordinatorUrlObj.toString();
+
   const clipboardDisabled = isTruthyEnv(process.env['SHARED_BRAINSTORM_NO_CLIPBOARD']);
   const copy = opts?.copyToClipboard ?? defaultCopyToClipboard;
   const clipboard_copied = clipboardDisabled
@@ -308,6 +320,7 @@ export async function startSession(
     join_code,
     invite_text,
     clipboard_copied,
+    coordinator_url,
   };
 }
 

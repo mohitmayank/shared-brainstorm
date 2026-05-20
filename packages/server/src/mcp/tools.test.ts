@@ -79,7 +79,12 @@ describe('startSession', () => {
       expect(result.invite_text).toContain(result.public_url);
       expect(result.invite_text).toContain(result.join_code);
       expect(result.clipboard_copied).toBe(true);
-      expect('coordinator_url' in result).toBe(false);
+      expect(result.coordinator_url).toMatch(
+        /^https?:\/\/.+\?role=coordinator&token=[A-Za-z0-9_-]{22}$/,
+      );
+      expect(result.coordinator_url).toContain(result.public_url.replace(/\/$/, ''));
+      expect(result.invite_text).not.toContain('coordinator'); // Pitfall 6 guard
+      expect(result.invite_text).not.toContain(result.coordinator_url);
     } finally {
       await stopSession().catch(() => null);
       rmSync(dir, { recursive: true, force: true });

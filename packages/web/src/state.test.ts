@@ -892,4 +892,60 @@ describe('reduce — presence EphemeralFrame branch (PRES-02)', () => {
     expect(next.lastSeq).toBe(7); // seq advances (durable event)
     expect(next.presence['sb_p_001']?.activity).toBe('submitted'); // presence side-effect
   });
+
+  // Test 7: WR-01 regression — typing-start → submitted → typing-stop must preserve 'submitted'
+  it('WR-01: typing-start → suggestion_added (submitted) → typing-stop (idle) leaves activity "submitted" (not deleted)', () => {
+    // Step 1: participant starts typing — presence entry set to 'typing'
+    const typingStartFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: { actor_kind: 'participant', actor_id: 'sb_p_001', activity: 'typing' },
+    };
+    const afterTypingStart = reduce(initialState, typingStartFrame);
+    expect(afterTypingStart.presence['sb_p_001']?.activity).toBe('typing');
+
+    // Step 2: suggestion_added arrives — presence promoted to 'submitted' (6s TTL)
+    const suggestionAddedEvt: AnyFrame = {
+      seq: 10,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'suggestion_added',
+      payload: {
+        question_id: 'sb_q_001',
+        suggestion: {
+          id: 'sb_sug_010',
+          participant_id: 'sb_p_001',
+          value: 'Use Postgres',
+          at: '2026-01-01T00:00:10Z',
+        },
+      },
+    };
+    const afterSubmit = reduce(afterTypingStart, suggestionAddedEvt);
+    expect(afterSubmit.presence['sb_p_001']?.activity).toBe('submitted');
+
+    // Step 3: typing-stop idle frame arrives (QuestionCard sends stop on submit) —
+    // must NOT delete the 'submitted' entry (WR-01 fix: idle only clears 'typing').
+    const typingStopFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: { actor_kind: 'participant', actor_id: 'sb_p_001', activity: 'idle' },
+    };
+    const afterTypingStop = reduce(afterSubmit, typingStopFrame);
+    expect(afterTypingStop.presence['sb_p_001']).toBeDefined();
+    expect(afterTypingStop.presence['sb_p_001']?.activity).toBe('submitted');
+  });
+
+  // Test 8: WR-01 complement — typing-start → typing-stop still removes the 'typing' entry
+  it('WR-01 complement: typing-start → typing-stop (idle) still removes a typing entry (normal path unaffected)', () => {
+    const typingStartFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: { actor_kind: 'participant', actor_id: 'sb_p_002', activity: 'typing' },
+    };
+    const afterStart = reduce(initialState, typingStartFrame);
+    expect(afterStart.presence['sb_p_002']?.activity).toBe('typing');
+
+    const typingStopFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: { actor_kind: 'participant', actor_id: 'sb_p_002', activity: 'idle' },
+    };
+    const afterStop = reduce(afterStart, typingStopFrame);
+    expect(afterStop.presence['sb_p_002']).toBeUndefined();
+  });
 });

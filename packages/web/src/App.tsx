@@ -248,11 +248,17 @@ export function App() {
               }, 4000),
             );
           } else {
+            // WR-01 fix (App.tsx mirror): only cancel the TTL timer if the current
+            // presence entry is 'typing'. If the entry was promoted to 'submitted'
+            // (by a durable suggestion_added/updated event that set a 6s timer),
+            // the 'idle' frame must NOT cancel that longer-lived submitted timer.
             const key = presenceFrame.payload.actor_id ?? '__coordinator';
-            const existing = presenceTimers.current.get(key);
-            if (existing !== undefined) {
-              clearTimeout(existing);
-              presenceTimers.current.delete(key);
+            if (state.presence[key]?.activity !== 'submitted') {
+              const existing = presenceTimers.current.get(key);
+              if (existing !== undefined) {
+                clearTimeout(existing);
+                presenceTimers.current.delete(key);
+              }
             }
           }
         }

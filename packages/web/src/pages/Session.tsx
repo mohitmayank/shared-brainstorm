@@ -11,8 +11,7 @@ interface Props {
 }
 
 export function Session({ session, me, sessionStatus, presence, onTyping }: Props) {
-  const q = session.current_question;
-  const activeQuestion = q && q.status === 'broadcast' ? q : null;
+  const activeQuestions = (session.questions ?? []).filter((q) => q.status === 'broadcast');
 
   return (
     <>
@@ -67,9 +66,22 @@ export function Session({ session, me, sessionStatus, presence, onTyping }: Prop
         </div>
       )}
 
-      {activeQuestion && (
-        <QuestionCard question={activeQuestion} me={me} participants={session.participants} onTyping={onTyping} />
-      )}
+      <div data-testid="batch-question-list" aria-label="Open questions">
+        {activeQuestions.length > 1 && (
+          <p className="muted batch-hint" data-testid="batch-hint" role="note">
+            Answer any of these in any order — each is independent.
+          </p>
+        )}
+        {activeQuestions.map((q) => (
+          <QuestionCard
+            key={q.id}
+            question={q}
+            me={me}
+            participants={session.participants}
+            onTyping={onTyping}
+          />
+        ))}
+      </div>
 
       {sessionStatus === 'choosing' && (
         <p
@@ -82,7 +94,7 @@ export function Session({ session, me, sessionStatus, presence, onTyping }: Prop
         </p>
       )}
 
-      {!activeQuestion && sessionStatus !== 'done' && (
+      {activeQuestions.length === 0 && sessionStatus !== 'done' && (
         <div className="join-empty-cta card" data-testid="join-empty-cta">
           <h2>You're in!</h2>
           <p className="muted">

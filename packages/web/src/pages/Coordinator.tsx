@@ -49,7 +49,7 @@ function nameFor(participants: WireParticipant[], id: string): string {
  * (handled by the reducer) — this component only drives the POST + error copy.
  */
 export function Coordinator({ session, roomLocked, sessionStatus, onPicking }: CoordinatorProps) {
-  const q = session.current_question;
+  const openQuestions = session.questions ?? [];
   const [cards, setCards] = useState<Record<string, CardState>>({});
 
   // WR-02/WR-03: per-ticket fallback-timer handles. Keyed by ticket so a new
@@ -75,15 +75,17 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking }: C
     };
   }, []);
 
-  // When a question is resolved (the reducer flips `current_question` away from
-  // a ticket), clear that ticket's pending fallback timer so it can no longer
-  // patch the now-terminal card.
-  const activeTicketId = q?.ticket_id ?? null;
+  // When a question is resolved (the reducer removes it from questions[]),
+  // clear that ticket's pending fallback timer so it can no longer patch
+  // the now-terminal card.
+  const activeTicketIds = new Set(openQuestions.map((q) => q.ticket_id));
   useEffect(() => {
     for (const ticketId of [...fallbackTimers.current.keys()]) {
-      if (ticketId !== activeTicketId) clearFallbackTimer(ticketId);
+      if (!activeTicketIds.has(ticketId)) clearFallbackTimer(ticketId);
     }
-  }, [activeTicketId, clearFallbackTimer]);
+    // Stable serialized set for dependency comparison (RESEARCH.md Pitfall 7)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify([...activeTicketIds].sort()), clearFallbackTimer]);
 
   const cardFor = (ticketId: string): CardState => cards[ticketId] ?? EMPTY_CARD;
 
@@ -211,7 +213,7 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking }: C
     }
   }, []);
 
-  const hasContent = q !== null || session.decisions.length > 0;
+  const hasContent = openQuestions.length > 0 || session.decisions.length > 0;
 
   return (
     <main aria-label="Coordinator view" data-testid="coordinator-page">
@@ -269,20 +271,30 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking }: C
       <DecisionsPanel decisions={session.decisions} />
 
       <div aria-live="polite" aria-relevant="additions text">
-        {q !== null ? (
-          <CoordinatorQuestionCard
-            question={q}
-            participants={session.participants}
-            participantName={(id) => nameFor(session.participants, id)}
-            selectedSuggestionId={cardFor(q.ticket_id).selectedSuggestionId}
-            overrideText={cardFor(q.ticket_id).overrideText}
-            recording={cardFor(q.ticket_id).recording}
-            error={cardFor(q.ticket_id).error}
-            onSelectSuggestion={(suggestionId) => onSelectSuggestion(q.ticket_id, suggestionId)}
-            onChangeOverride={(text) => onChangeOverride(q.ticket_id, text)}
-            onRecordSuggestion={() => onRecordSuggestion(q.ticket_id, q.suggestions)}
-            onRecordOverride={() => onRecordOverride(q.ticket_id)}
-          />
+        {openQuestions.length > 0 ? (
+          <div data-testid="batch-question-list">
+            {openQuestions.length > 1 && (
+              <p className="muted batch-hint" data-testid="batch-hint" role="note">
+                Resolve each question independently — picking one won't affect the others.
+              </p>
+            )}
+            {openQuestions.map((q) => (
+              <CoordinatorQuestionCard
+                key={q.ticket_id}
+                question={q}
+                participants={session.participants}
+                participantName={(id) => nameFor(session.participants, id)}
+                selectedSuggestionId={cardFor(q.ticket_id).selectedSuggestionId}
+                overrideText={cardFor(q.ticket_id).overrideText}
+                recording={cardFor(q.ticket_id).recording}
+                error={cardFor(q.ticket_id).error}
+                onSelectSuggestion={(suggestionId) => onSelectSuggestion(q.ticket_id, suggestionId)}
+                onChangeOverride={(text) => onChangeOverride(q.ticket_id, text)}
+                onRecordSuggestion={() => onRecordSuggestion(q.ticket_id, q.suggestions)}
+                onRecordOverride={() => onRecordOverride(q.ticket_id)}
+              />
+            ))}
+          </div>
         ) : !hasContent ? (
           <div className="card">
             <p className="muted">Waiting for the AI host to post a question…</p>

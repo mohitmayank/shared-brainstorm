@@ -125,6 +125,14 @@ export const EphemeralFrame = z.discriminatedUnion('type', [
     }),
   }),
   z.object({ type: z.literal('heartbeat') }),
+  z.object({
+    type: z.literal('presence'),
+    payload: z.object({
+      actor_kind: z.enum(['participant', 'coordinator']),
+      actor_id: z.string().optional(),
+      activity: z.enum(['typing', 'picking', 'idle']),
+    }),
+  }),
 ]);
 export type EphemeralFrame = z.infer<typeof EphemeralFrame>;
 
@@ -145,5 +153,15 @@ export const ClientCommand = z.discriminatedUnion('type', [
     text: z.string().min(1).max(4000),
   }),
   z.object({ type: z.literal('pong') }),
+  z.object({
+    type: z.literal('typing'),
+    question_id: z.string(),
+    state: z.enum(['start', 'stop']),
+  }),
+  z.object({
+    type: z.literal('picking'),
+    ticket_id: z.string(),
+    state: z.enum(['start', 'stop']),
+  }),
 ]);
 export type ClientCommand = z.infer<typeof ClientCommand>;

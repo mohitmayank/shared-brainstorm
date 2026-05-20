@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { createWsRouter } from './ws.js';
 import { SessionManager } from '../session/SessionManager.js';
+import { EphemeralFrame, ClientCommand } from '@shared-brainstorm/shared';
 import { fixedClock } from '../session/clock.js';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -260,6 +261,318 @@ describe('coordinator upgrade', () => {
     sent.length = 0;
     mgr.askGroup({ question: 'q?' });
     expect(sent.find((m) => m.type === 'question_broadcast')).toBeTruthy();
+  });
+});
+
+describe('typing command — approved-participant gate', () => {
+  it('Test 1: typing start from approved participant calls broadcastEphemeral with presence frame (actor_id server-derived)', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'q?' });
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    mgr.approveParticipant(p.id);
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    const origBroadcast = router.broadcast.bind(router);
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+      origBroadcast(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    conn.handle({ type: 'typing', question_id: mgr.currentQuestion()!.id, state: 'start' });
+
+    const presenceFrame = ephemeralFrames.find((f) => f.type === 'presence');
+    expect(presenceFrame).toBeTruthy();
+    if (presenceFrame?.type === 'presence') {
+      expect(presenceFrame.payload.actor_kind).toBe('participant');
+      expect(presenceFrame.payload.actor_id).toBe(p.id); // server-derived, NOT from client payload
+      expect(presenceFrame.payload.activity).toBe('typing');
+    }
+  });
+
+  it('Test 2: typing command from PENDING participant — broadcastEphemeral NOT called', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'q?' });
+    const p = mgr.addParticipant({ display_name: 'Bob' });
+    // p is pending — NOT approved
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    conn.handle({ type: 'typing', question_id: mgr.currentQuestion()!.id, state: 'start' });
+
+    expect(ephemeralFrames.filter((f) => f.type === 'presence')).toHaveLength(0);
+  });
+
+  it('Test 3: typing command from coordinator connection (me is null) — broadcastEphemeral NOT called', async () => {
+    const { router } = setup();
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    conn.handle({ type: 'typing', question_id: 'q1', state: 'start' });
+
+    expect(ephemeralFrames.filter((f) => f.type === 'presence')).toHaveLength(0);
+  });
+
+  it('Test 4: typing with state "stop" → broadcastEphemeral called with activity "idle"', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'q?' });
+    const p = mgr.addParticipant({ display_name: 'Carol' });
+    mgr.approveParticipant(p.id);
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    const origBroadcast = router.broadcast.bind(router);
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+      origBroadcast(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    conn.handle({ type: 'typing', question_id: mgr.currentQuestion()!.id, state: 'stop' });
+
+    const presenceFrame = ephemeralFrames.find((f) => f.type === 'presence');
+    expect(presenceFrame).toBeTruthy();
+    if (presenceFrame?.type === 'presence') {
+      expect(presenceFrame.payload.activity).toBe('idle');
+    }
+  });
+});
+
+describe('picking command — coordinator-only gate', () => {
+  it('Test 5: picking start from coordinator → setSessionStatus("choosing") + broadcastEphemeral with activity "picking"', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'q?' });
+    // Ensure question is broadcast so the race guard passes
+    expect(mgr.currentQuestion()?.status).toBe('broadcast');
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    const origBroadcast = router.broadcast.bind(router);
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+      origBroadcast(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    conn.handle({ type: 'picking', ticket_id: 'some-ticket', state: 'start' });
+
+    expect(mgr.sessionView().session_status).toBe('choosing');
+
+    const presenceFrame = ephemeralFrames.find((f) => f.type === 'presence');
+    expect(presenceFrame).toBeTruthy();
+    if (presenceFrame?.type === 'presence') {
+      expect(presenceFrame.payload.actor_kind).toBe('coordinator');
+      expect(presenceFrame.payload.activity).toBe('picking');
+    }
+  });
+
+  it('Test 6: picking command from participant (isCoordinator=false) → setSessionStatus NOT called, broadcastEphemeral NOT called', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'q?' });
+    const p = mgr.addParticipant({ display_name: 'Dave' });
+    mgr.approveParticipant(p.id);
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    conn.handle({ type: 'picking', ticket_id: 'some-ticket', state: 'start' });
+
+    // Status must remain unchanged (was 'question_open' after askGroup)
+    expect(mgr.sessionView().session_status).toBe('question_open');
+    expect(ephemeralFrames.filter((f) => f.type === 'presence')).toHaveLength(0);
+  });
+
+  it('Test 7: picking start when currentQuestion().status !== "broadcast" — silently ignored (race condition guard)', async () => {
+    const { router, mgr } = setup();
+    // No question posted — currentQuestion() is null
+    expect(mgr.currentQuestion()).toBeNull();
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    conn.handle({ type: 'picking', ticket_id: 'some-ticket', state: 'start' });
+
+    // status stays at 'waiting' (no question was broadcast)
+    expect(mgr.sessionView().session_status).toBe('waiting');
+    expect(ephemeralFrames.filter((f) => f.type === 'presence')).toHaveLength(0);
+  });
+
+  it('Test 8: picking stop → broadcastEphemeral with activity "idle"; if current question is broadcast, setSessionStatus("question_open")', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'q?' });
+    // First, transition to choosing
+    mgr.setSessionStatus('choosing');
+    expect(mgr.sessionView().session_status).toBe('choosing');
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    const origBroadcast = router.broadcast.bind(router);
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+      origBroadcast(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    conn.handle({ type: 'picking', ticket_id: 'some-ticket', state: 'stop' });
+
+    // Status must return to question_open (question is still broadcast)
+    expect(mgr.sessionView().session_status).toBe('question_open');
+
+    const presenceFrame = ephemeralFrames.find((f) => f.type === 'presence');
+    expect(presenceFrame).toBeTruthy();
+    if (presenceFrame?.type === 'presence') {
+      expect(presenceFrame.payload.activity).toBe('idle');
+    }
+  });
+});
+
+describe('EphemeralFrame presence variant schema', () => {
+  it('Test 9: EphemeralFrame.parse succeeds for a valid presence frame', () => {
+    const frame = EphemeralFrame.parse({
+      type: 'presence',
+      payload: {
+        actor_kind: 'participant',
+        actor_id: 'p1',
+        activity: 'typing',
+      },
+    });
+    expect(frame.type).toBe('presence');
+    if (frame.type === 'presence') {
+      expect(frame.payload.actor_kind).toBe('participant');
+      expect(frame.payload.actor_id).toBe('p1');
+      expect(frame.payload.activity).toBe('typing');
+    }
+  });
+
+  it('Test 10 (CRITICAL): broadcastEphemeral with real presence frame does NOT grow RingBuffer (replay length unchanged)', () => {
+    const mgr = new SessionManager({
+      clock: fixedClock('2026-04-29T12:00:00Z'),
+      transcriptDir: mkdtempSync(pjoin(tmpdir(), 'sb-')),
+    });
+    mgr.start({ brief: 'test' });
+    const router = createWsRouter({ manager: mgr });
+    mgr.setBroadcaster((e) => router.broadcast(e));
+
+    const replayBefore = mgr.replay(-1).length;
+
+    // Parse a real presence EphemeralFrame via the Zod schema
+    const presenceFrame = EphemeralFrame.parse({
+      type: 'presence',
+      payload: {
+        actor_kind: 'participant',
+        actor_id: 'sb_p_001',
+        activity: 'typing',
+      },
+    });
+
+    mgr.broadcastEphemeral(presenceFrame);
+
+    const replayAfter = mgr.replay(-1).length;
+    expect(replayAfter).toBe(replayBefore); // RingBuffer must be unchanged
+  });
+
+  it('Test 11: presence EphemeralFrame parse result has NO "seq" property', () => {
+    const frame = EphemeralFrame.parse({
+      type: 'presence',
+      payload: {
+        actor_kind: 'coordinator',
+        activity: 'picking',
+      },
+    });
+    expect(Object.prototype.hasOwnProperty.call(frame, 'seq')).toBe(false);
+  });
+
+  it('Test 12: ClientCommand.parse succeeds for typing command', () => {
+    const cmd = ClientCommand.parse({
+      type: 'typing',
+      question_id: 'q1',
+      state: 'start',
+    });
+    expect(cmd.type).toBe('typing');
+    if (cmd.type === 'typing') {
+      expect(cmd.question_id).toBe('q1');
+      expect(cmd.state).toBe('start');
+    }
+  });
+
+  it('Test 13: ClientCommand.parse succeeds for picking command', () => {
+    const cmd = ClientCommand.parse({
+      type: 'picking',
+      ticket_id: 't1',
+      state: 'stop',
+    });
+    expect(cmd.type).toBe('picking');
+    if (cmd.type === 'picking') {
+      expect(cmd.ticket_id).toBe('t1');
+      expect(cmd.state).toBe('stop');
+    }
   });
 });
 

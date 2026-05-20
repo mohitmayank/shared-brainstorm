@@ -209,6 +209,48 @@ export function createWsRouter({
           case 'pong':
             sub.lastSeen = Date.now();
             return;
+          case 'typing': {
+            // T-05-08: actor_id is server-derived from me.id (validated sb_p cookie),
+            // NOT from the client command payload — prevents identity spoofing.
+            if (!me) return; // coordinator has no participant identity
+            const freshTyping = manager.sessionView().participants.find((x) => x.id === me.id);
+            if (freshTyping?.status !== 'approved') return;
+            const typingActivity = c.state === 'start' ? ('typing' as const) : ('idle' as const);
+            manager.broadcastEphemeral({
+              type: 'presence',
+              payload: {
+                actor_kind: 'participant',
+                actor_id: me.id,
+                activity: typingActivity,
+              },
+            });
+            return;
+          }
+          case 'picking': {
+            // T-05-09: only coordinators can trigger picking — gate on isCoordinator
+            // flag fixed at WS upgrade time from sb_c cookie.
+            if (!isCoordinator) return;
+            if (c.state === 'start') {
+              // T-05-10: race condition guard — only transition to 'choosing' when a
+              // broadcast question exists.
+              if (manager.currentQuestion()?.status !== 'broadcast') return;
+              manager.setSessionStatus('choosing');
+              manager.broadcastEphemeral({
+                type: 'presence',
+                payload: { actor_kind: 'coordinator', activity: 'picking' },
+              });
+            } else {
+              // stop: return to question_open if a question is still broadcast
+              if (manager.currentQuestion()?.status === 'broadcast') {
+                manager.setSessionStatus('question_open');
+              }
+              manager.broadcastEphemeral({
+                type: 'presence',
+                payload: { actor_kind: 'coordinator', activity: 'idle' },
+              });
+            }
+            return;
+          }
         }
       };
 

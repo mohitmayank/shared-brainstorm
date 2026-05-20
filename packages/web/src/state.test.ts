@@ -204,11 +204,14 @@ describe('reduce — seq guard (WR-07: idempotent replay)', () => {
     const withQ = reduce(baseState, broadcastEvt); // lastSeq = 3
     const resolved = reduce(withQ, resolvedEvt); // lastSeq = 4
     // A stale re-delivery of the seq-3 broadcast must not clobber the resolved
-    // question or rewind the watermark.
+    // question or rewind the watermark. Phase 6: question_resolved removes the
+    // question from questions[], so current_question is null after resolution.
     const stale = reduce(resolved, broadcastEvt);
     expect(stale).toBe(resolved);
     expect(stale.lastSeq).toBe(4);
-    expect(stale.session?.current_question?.status).toBe('resolved');
+    // question was removed from questions[] on resolution (Phase 6 model)
+    expect(stale.session?.current_question).toBeNull();
+    expect(stale.session?.decisions).toHaveLength(1); // decision persisted
   });
 
   it('drops an event whose seq equals the current watermark', () => {
@@ -405,7 +408,7 @@ describe('reduce — question lifecycle', () => {
     expect(next.lastSeq).toBe(3);
   });
 
-  it('marks question cancelled on question_cancelled', () => {
+  it('removes question on question_cancelled (Phase 6: no cancelled card per UI-SPEC)', () => {
     const withQ = reduce(baseState, broadcastEvt);
     const cancelEvt: AnyFrame = {
       seq: 4,
@@ -414,7 +417,9 @@ describe('reduce — question lifecycle', () => {
       payload: { question_id: 'sb_q_001', reason: 'timeout' },
     };
     const next = reduce(withQ, cancelEvt);
-    expect(next.session?.current_question?.status).toBe('cancelled');
+    // Phase 6: cancelled question is removed from questions[] immediately
+    expect(next.session?.questions).toHaveLength(0);
+    expect(next.session?.current_question).toBeNull();
   });
 });
 
@@ -1046,5 +1051,259 @@ describe('reduce — presence EphemeralFrame branch (PRES-02)', () => {
     const afterParticipantStop = reduce(afterCoordStop, participantIdleFrame);
     expect(afterParticipantStop.presence['sb_p_001']?.activity).toBe('submitted');
     expect(Object.keys(afterParticipantStop.presence)).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6 (06-02): questions[] accumulation (BATCH-02)
+// ---------------------------------------------------------------------------
+
+describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
+  const baseState = reduce(initialState, welcomeEphemeral);
+
+  const q1: AnyFrame = {
+    seq: 10,
+    ts: '2026-01-01T00:00:10Z',
+    type: 'question_broadcast',
+    payload: {
+      question: {
+        id: 'sb_q_001',
+        ticket_id: 'sb_t_001',
+        asked_at: '2026-01-01T00:00:10Z',
+        text: 'What is Q1?',
+        status: 'broadcast' as const,
+        suggestions: [],
+        comments: [],
+        resolution: null,
+      },
+    },
+  };
+
+  const q2: AnyFrame = {
+    seq: 11,
+    ts: '2026-01-01T00:00:11Z',
+    type: 'question_broadcast',
+    payload: {
+      question: {
+        id: 'sb_q_002',
+        ticket_id: 'sb_t_002',
+        asked_at: '2026-01-01T00:00:11Z',
+        text: 'What is Q2?',
+        status: 'broadcast' as const,
+        suggestions: [],
+        comments: [],
+        resolution: null,
+      },
+    },
+  };
+
+  it('question_broadcast adds Q1 to questions[]; questions has length 1', () => {
+    const next = reduce(baseState, q1);
+    expect(next.session?.questions).toHaveLength(1);
+    expect(next.session?.questions[0]?.id).toBe('sb_q_001');
+  });
+
+  it('second question_broadcast for Q2 appends; questions has length 2, order [Q1, Q2]', () => {
+    const withQ1 = reduce(baseState, q1);
+    const withBoth = reduce(withQ1, q2);
+    expect(withBoth.session?.questions).toHaveLength(2);
+    expect(withBoth.session?.questions[0]?.id).toBe('sb_q_001');
+    expect(withBoth.session?.questions[1]?.id).toBe('sb_q_002');
+  });
+
+  it('duplicate question_broadcast for Q1 (same id) UPDATES in place; questions still length 1 (idempotent)', () => {
+    const withQ1 = reduce(baseState, q1);
+    const updatedQ1: AnyFrame = {
+      seq: 12,
+      ts: '2026-01-01T00:00:12Z',
+      type: 'question_broadcast',
+      payload: {
+        question: {
+          id: 'sb_q_001', // same id
+          ticket_id: 'sb_t_001',
+          asked_at: '2026-01-01T00:00:10Z',
+          text: 'What is Q1? (updated)',
+          status: 'broadcast' as const,
+          suggestions: [],
+          comments: [],
+          resolution: null,
+        },
+      },
+    };
+    const updated = reduce(withQ1, updatedQ1);
+    expect(updated.session?.questions).toHaveLength(1);
+    expect(updated.session?.questions[0]?.text).toBe('What is Q1? (updated)');
+  });
+
+  it('current_question derived as questions[0] after question_broadcast for Q1 then Q2', () => {
+    const withQ1 = reduce(baseState, q1);
+    const withBoth = reduce(withQ1, q2);
+    expect(withBoth.session?.current_question?.id).toBe('sb_q_001');
+  });
+
+  it('current_question is null when questions is empty', () => {
+    expect(baseState.session?.questions).toHaveLength(0);
+    expect(baseState.session?.current_question).toBeNull();
+  });
+
+  it('question_resolved for Q2 removes Q2 from questions[]; Q1 stays; decisions gains Q2 entry', () => {
+    const withBoth = reduce(reduce(baseState, q1), q2);
+    const resolveQ2: AnyFrame = {
+      seq: 20,
+      ts: '2026-01-01T00:00:20Z',
+      type: 'question_resolved',
+      payload: {
+        question_id: 'sb_q_002',
+        resolution: { value: 'Answer for Q2', source: 'override' as const, recorded_at: '2026-01-01T00:00:20Z' },
+      },
+    };
+    const next = reduce(withBoth, resolveQ2);
+    expect(next.session?.questions).toHaveLength(1);
+    expect(next.session?.questions[0]?.id).toBe('sb_q_001');
+    expect(next.session?.decisions).toHaveLength(1);
+    expect(next.session?.decisions[0]?.answer).toBe('Answer for Q2');
+    expect(next.session?.decisions[0]?.question_id).toBe('sb_q_002');
+  });
+
+  it('question_resolved for Q2 when Q2 is at index 1 — questions[0] (Q1) is unchanged', () => {
+    const withBoth = reduce(reduce(baseState, q1), q2);
+    const resolveQ2: AnyFrame = {
+      seq: 21,
+      ts: '2026-01-01T00:00:21Z',
+      type: 'question_resolved',
+      payload: {
+        question_id: 'sb_q_002',
+        resolution: { value: 'Answer for Q2', source: 'suggestion' as const, recorded_at: '2026-01-01T00:00:21Z' },
+      },
+    };
+    const next = reduce(withBoth, resolveQ2);
+    // Q1 remains at index 0, still broadcast, still submittable
+    expect(next.session?.questions[0]?.id).toBe('sb_q_001');
+    expect(next.session?.questions[0]?.status).toBe('broadcast');
+    expect(next.session?.current_question?.id).toBe('sb_q_001');
+  });
+
+  it('question_cancelled for Q1 removes Q1 from questions[]; no entry in decisions[]', () => {
+    const withQ1 = reduce(baseState, q1);
+    const cancelQ1: AnyFrame = {
+      seq: 22,
+      ts: '2026-01-01T00:00:22Z',
+      type: 'question_cancelled',
+      payload: { question_id: 'sb_q_001', reason: 'timeout' },
+    };
+    const next = reduce(withQ1, cancelQ1);
+    expect(next.session?.questions).toHaveLength(0);
+    expect(next.session?.decisions).toHaveLength(0);
+    expect(next.session?.current_question).toBeNull();
+  });
+
+  it('suggestion_added event with question_id=Q2.id updates Q2.suggestions; Q1.suggestions unaffected', () => {
+    const withBoth = reduce(reduce(baseState, q1), q2);
+    const suggestionForQ2: AnyFrame = {
+      seq: 30,
+      ts: '2026-01-01T00:00:30Z',
+      type: 'suggestion_added',
+      payload: {
+        question_id: 'sb_q_002',
+        suggestion: {
+          id: 'sb_sug_001',
+          participant_id: 'sb_p_001',
+          value: 'My answer for Q2',
+          at: '2026-01-01T00:00:30Z',
+        },
+      },
+    };
+    const next = reduce(withBoth, suggestionForQ2);
+    const q1State = next.session?.questions.find((q) => q.id === 'sb_q_001');
+    const q2State = next.session?.questions.find((q) => q.id === 'sb_q_002');
+    expect(q2State?.suggestions).toHaveLength(1);
+    expect(q2State?.suggestions[0]?.value).toBe('My answer for Q2');
+    // Q1 is untouched
+    expect(q1State?.suggestions).toHaveLength(0);
+  });
+
+  it('welcome payload with questions:[Q1,Q2] seeds state.session.questions with both', () => {
+    const welcomeWithQuestions: AnyFrame = {
+      type: 'welcome',
+      payload: {
+        session: {
+          session_id: 'sb_s_001',
+          brief: 'test session',
+          participants: [],
+          decisions: [],
+          questions: [
+            {
+              id: 'sb_q_001',
+              ticket_id: 'sb_t_001',
+              asked_at: '2026-01-01T00:00:10Z',
+              text: 'What is Q1?',
+              status: 'broadcast' as const,
+              suggestions: [],
+              comments: [],
+              resolution: null,
+            },
+            {
+              id: 'sb_q_002',
+              ticket_id: 'sb_t_002',
+              asked_at: '2026-01-01T00:00:11Z',
+              text: 'What is Q2?',
+              status: 'broadcast' as const,
+              suggestions: [],
+              comments: [],
+              resolution: null,
+            },
+          ],
+          current_question: null,
+          locked: false,
+          session_status: 'question_open' as const,
+        },
+        is_coordinator: false,
+      },
+    };
+    const next = reduce(initialState, welcomeWithQuestions);
+    expect(next.session?.questions).toHaveLength(2);
+    expect(next.session?.questions[0]?.id).toBe('sb_q_001');
+    expect(next.session?.questions[1]?.id).toBe('sb_q_002');
+  });
+
+  it('replay of question_broadcast already in welcome does NOT duplicate (seq guard + findIndex)', () => {
+    // Welcome seeds Q1. A ring-buffer replay of q1's question_broadcast (seq 10)
+    // must be dropped by the WR-07 seq guard (lastSeq starts at -1 for ephemeral welcome).
+    // We simulate: welcome with Q1, then advance lastSeq past seq 10, then replay.
+    const welcomeWithQ1: AnyFrame = {
+      type: 'welcome',
+      payload: {
+        session: {
+          session_id: 'sb_s_001',
+          brief: 'test session',
+          participants: [],
+          decisions: [],
+          questions: [
+            {
+              id: 'sb_q_001',
+              ticket_id: 'sb_t_001',
+              asked_at: '2026-01-01T00:00:10Z',
+              text: 'What is Q1?',
+              status: 'broadcast' as const,
+              suggestions: [],
+              comments: [],
+              resolution: null,
+            },
+          ],
+          current_question: null,
+          locked: false,
+          session_status: 'question_open' as const,
+        },
+        is_coordinator: false,
+      },
+    };
+    // Ephemeral welcome seeds state with Q1 but lastSeq stays -1
+    const seeded = reduce(initialState, welcomeWithQ1);
+    expect(seeded.session?.questions).toHaveLength(1);
+    // Replay of seq=10 question_broadcast — passes guard (seq 10 > lastSeq -1),
+    // findIndex dedup updates in place instead of appending
+    const replayed = reduce(seeded, q1); // q1 has seq=10
+    expect(replayed.session?.questions).toHaveLength(1);
+    expect(replayed.session?.questions[0]?.id).toBe('sb_q_001');
   });
 });

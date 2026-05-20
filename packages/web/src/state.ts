@@ -8,7 +8,7 @@ type WireSession = WelcomePayload['session'];
 // exported `WireParticipant` as the non-null participant shape so components
 // that already consume it are unaffected — `UiState.me` carries the nullability.
 type WireParticipant = NonNullable<WelcomePayload['you']>;
-type WireQuestion = NonNullable<WireSession['current_question']>;
+type WireQuestion = WireSession['questions'][number];
 type WireSuggestion = WireQuestion['suggestions'][number];
 type WireComment = WireQuestion['comments'][number];
 
@@ -103,12 +103,19 @@ function isEphemeralFrame(frame: AnyFrame): frame is EphemeralFrame {
   return !('seq' in frame);
 }
 
-function withQuestion(
+function withOpenQuestion(
   session: WireSession,
+  questionId: string,
   updater: (q: WireQuestion) => WireQuestion,
 ): WireSession {
-  if (!session.current_question) return session;
-  return { ...session, current_question: updater(session.current_question) };
+  const idx = session.questions.findIndex((q) => q.id === questionId);
+  if (idx < 0) return session;
+  const newQuestions = session.questions.map((q, i) => (i === idx ? updater(q) : q));
+  return {
+    ...session,
+    questions: newQuestions,
+    current_question: newQuestions[0] ?? null, // keep derived back-compat field in sync
+  };
 }
 
 // TypeScript cannot narrow `evt.payload` via `evt.type` check when using zod's
@@ -199,10 +206,19 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
   if (type === 'question_broadcast') {
     if (!state.session) return { ...state, lastSeq: seq };
     const p = payload<{ question: WireQuestion }>(evt);
+    const existingIndex = state.session.questions.findIndex((q) => q.id === p.question.id);
+    const newQuestions =
+      existingIndex >= 0
+        ? state.session.questions.map((q, i) => (i === existingIndex ? p.question : q))
+        : [...state.session.questions, p.question];
     return {
       ...state,
       lastSeq: seq,
-      session: { ...state.session, current_question: p.question },
+      session: {
+        ...state.session,
+        questions: newQuestions,
+        current_question: newQuestions[0] ?? null, // derived back-compat
+      },
     };
   }
 
@@ -219,8 +235,7 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
         ...state.presence,
         [participantId]: { activity: 'submitted', expiresAt: Date.now() + 6000 },
       },
-      session: withQuestion(state.session, (q) => {
-        if (q.id !== p.question_id) return q;
+      session: withOpenQuestion(state.session, p.question_id, (q) => {
         const already = q.suggestions.find((s) => s.id === p.suggestion.id);
         if (already) return q;
         return { ...q, suggestions: [...q.suggestions, p.suggestion] };
@@ -240,8 +255,7 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
         ...state.presence,
         [participantId]: { activity: 'submitted', expiresAt: Date.now() + 6000 },
       },
-      session: withQuestion(state.session, (q) => {
-        if (q.id !== p.question_id) return q;
+      session: withOpenQuestion(state.session, p.question_id, (q) => {
         return {
           ...q,
           suggestions: q.suggestions.map((s) =>
@@ -258,8 +272,7 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     return {
       ...state,
       lastSeq: seq,
-      session: withQuestion(state.session, (q) => {
-        if (q.id !== p.question_id) return q;
+      session: withOpenQuestion(state.session, p.question_id, (q) => {
         const already = q.comments.find((c) => c.id === p.comment.id);
         if (already) return q;
         return { ...q, comments: [...q.comments, p.comment] };
@@ -275,24 +288,20 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       recorded_at: string;
     };
     const p = payload<{ question_id: string; resolution: Resolution }>(evt);
-    const resolved = state.session.current_question;
+    // Look up the resolved question in questions[] by question_id (Pitfall 6: don't use current_question)
+    const resolved = state.session.questions.find((q) => q.id === p.question_id) ?? null;
     const newDecision =
       resolved !== null
-        ? {
-            question_id: resolved.id,
-            question: resolved.text,
-            answer: p.resolution.value,
-          }
+        ? { question_id: resolved.id, question: resolved.text, answer: p.resolution.value }
         : null;
+    const filteredQuestions = state.session.questions.filter((q) => q.id !== p.question_id);
     return {
       ...state,
       lastSeq: seq,
       session: {
         ...state.session,
-        current_question:
-          resolved !== null
-            ? { ...resolved, status: 'resolved' as const, resolution: p.resolution }
-            : null,
+        questions: filteredQuestions,
+        current_question: filteredQuestions[0] ?? null,
         decisions:
           newDecision !== null
             ? [...state.session.decisions, newDecision]
@@ -304,16 +313,15 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
   if (type === 'question_cancelled') {
     if (!state.session) return { ...state, lastSeq: seq };
     const p = payload<{ question_id: string; reason: string }>(evt);
-    const current = state.session.current_question;
+    // Remove from questions[] immediately (no "cancelled" card per UI-SPEC)
+    const filteredQuestions = state.session.questions.filter((q) => q.id !== p.question_id);
     return {
       ...state,
       lastSeq: seq,
       session: {
         ...state.session,
-        current_question:
-          current?.id === p.question_id
-            ? { ...current, status: 'cancelled' as const }
-            : current,
+        questions: filteredQuestions,
+        current_question: filteredQuestions[0] ?? null,
       },
     };
   }

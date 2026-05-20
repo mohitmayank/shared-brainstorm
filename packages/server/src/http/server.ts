@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
 import { z } from 'zod';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { SessionManager } from '../session/SessionManager.js';
 import type { Participant, ParticipantId, QuestionId } from '@shared-brainstorm/shared';
 import {
@@ -59,6 +59,19 @@ function isCapError(e: unknown): e is Error & { code: string; limit: number } {
   const code = (e as Error & { code?: unknown }).code;
   const limit = (e as Error & { limit?: unknown }).limit;
   return typeof code === 'string' && code.startsWith('cap_exceeded') && typeof limit === 'number';
+}
+
+/**
+ * CR-01: constant-time coordinator-token comparison with no length oracle.
+ * Both the supplied and expected tokens are hashed to a fixed 32-byte SHA-256
+ * digest before `timingSafeEqual`, so the compare always runs over equal-length
+ * buffers and the supplied-token length can never short-circuit the check (the
+ * pre-`timingSafeEqual` length branch previously leaked the secret's length).
+ */
+function tokenMatches(supplied: string, expected: string): boolean {
+  const a = createHash('sha256').update(supplied, 'utf8').digest();
+  const b = createHash('sha256').update(expected, 'utf8').digest();
+  return timingSafeEqual(a, b);
 }
 
 export function buildApp({
@@ -151,8 +164,10 @@ export function buildApp({
   /**
    * Gates the coordinator-only routes (mounted on `POST /api/coordinator/answer`
    * below). Compares the `sb_c` cookie against the active session's coordinator
-   * token using `node:crypto.timingSafeEqual` behind a length pre-check so the
-   * compare never throws on mismatched buffer lengths (cross-cutting concern 3).
+   * token via `tokenMatches`, which hashes both sides to a fixed-width digest
+   * before `node:crypto.timingSafeEqual` so the compare is always constant-time
+   * over equal-length buffers and leaks no length oracle (cross-cutting concern
+   * 3 / CR-01).
    */
   const requireCoordinator: MiddlewareHandler<AppEnv> = async (c, next) => {
     const cookie = readCoordinatorCookie(c);
@@ -166,10 +181,7 @@ export function buildApp({
       // with a distinct error code, not a 500.
       return c.json({ error: 'session_ended' }, 401);
     }
-    if (cookie.length !== expected.length) {
-      return c.json({ error: 'not_coordinator' }, 401);
-    }
-    if (!timingSafeEqual(Buffer.from(cookie, 'utf8'), Buffer.from(expected, 'utf8'))) {
+    if (!tokenMatches(cookie, expected)) {
       return c.json({ error: 'not_coordinator' }, 401);
     }
     await next();
@@ -189,10 +201,7 @@ export function buildApp({
       return c.json({ error: 'session_ended' }, 404);
     }
     const supplied = parsed.data.token;
-    if (supplied.length !== expected.length) {
-      return c.json({ error: 'not_coordinator' }, 401);
-    }
-    if (!timingSafeEqual(Buffer.from(supplied, 'utf8'), Buffer.from(expected, 'utf8'))) {
+    if (!tokenMatches(supplied, expected)) {
       return c.json({ error: 'not_coordinator' }, 401);
     }
     setCoordinatorCookie(c, supplied, { secure: resolveSecure() });

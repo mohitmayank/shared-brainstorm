@@ -139,6 +139,16 @@ export function App() {
   const [dismissedTunnelUrl, setDismissedTunnelUrl] = useState<string | null>(null);
 
   const startWsRef = useRef<(lastSeq: number) => void>(() => undefined);
+  // CR-01: mirror joinLocked into a ref so the onClose closure (captured at
+  // WS-connect time) can read the *current* lock state without re-creating
+  // startWs on every joinLocked state change.
+  const joinLockedRef = useRef<boolean>(false);
+  useEffect(() => {
+    joinLockedRef.current = joinLocked;
+  }, [joinLocked]);
+  // CR-01: ref to handleJoin so the onClose closure can trigger a fresh join
+  // without depending on handleJoin in the startWs useCallback dep array.
+  const handleJoinRef = useRef<(name: string) => Promise<void>>(() => Promise.resolve());
 
   const startWs = useCallback((lastSeq: number) => {
     if (wsRef.current) {
@@ -180,9 +190,16 @@ export function App() {
             setCoordinatorStatus('invalid');
             return;
           }
-          // Cookie was missing/stale — fall back to the Join form.
-          setResuming(false);
-          setNeedsJoin(true);
+          // Cookie was missing/stale — try the remembered name first (CR-01:
+          // only auto-join when there is genuinely no server-recognized identity;
+          // never re-POST if a valid sb_p cookie already exists).
+          const remembered = getName();
+          if (remembered && !joinLockedRef.current) {
+            void handleJoinRef.current(remembered);
+          } else {
+            setResuming(false);
+            setNeedsJoin(true);
+          }
           return;
         }
         // Transient close: schedule a reconnect with exponential backoff
@@ -252,16 +269,14 @@ export function App() {
         if (reconnectTimer.current !== null) clearTimeout(reconnectTimer.current);
       };
     }
-    // Phase 4 / JOIN-05: if the participant has a remembered display name, auto-
-    // submit the join on mount so they go straight to the waiting-for-approval
-    // screen without having to fill in the form again. The "Not you? Change name"
-    // link in Join.tsx lets them override.
-    const remembered = getName();
-    if (remembered && !joinLocked) {
-      void handleJoin(remembered);
-    } else {
-      startWs(getLastSeq());
-    }
+    // CR-01 fix: always attempt cookie-based resume first. If the sb_p cookie is
+    // valid the WS succeeds and the welcome event lands. If the cookie is absent
+    // or stale the server closes with 1008 (NOT_JOINED_CODE) and the onClose
+    // handler below tries the remembered name (first-ever join). This preserves
+    // the identity of an already-approved participant across page reloads —
+    // unconditionally POST-ing /api/join would mint a new id and demote them back
+    // to pending (JOIN-05 violation fixed here).
+    startWs(getLastSeq());
     return () => {
       if (wsRef.current) wsRef.current.close();
       if (reconnectTimer.current !== null) clearTimeout(reconnectTimer.current);
@@ -276,6 +291,13 @@ export function App() {
       try {
         await join({ display_name: name });
         setName(name);
+        // WR-02: a successful /api/join creates a brand-new participant identity.
+        // Any previously persisted last_seq belongs to a prior session or a prior
+        // identity in the same session. Reset it so the WS ?last_seq= query param
+        // starts from -1 (no replay watermark) — a new participant has no prior
+        // replay history and the WR-07 monotonic guard must not drop the new
+        // session's low-seq events.
+        setLastSeq(-1);
         setNeedsJoin(false);
         startWs(getLastSeq());
       } catch (e) {
@@ -289,6 +311,11 @@ export function App() {
     },
     [startWs],
   );
+
+  // CR-01: keep the handleJoinRef in sync with the latest handleJoin callback
+  // so the onClose closure (captured at WS-connect time) always calls the
+  // current version without startWs needing handleJoin in its dep array.
+  handleJoinRef.current = handleJoin;
 
   // Phase 4: approved participants only. Pending participants have me set but must
   // see the waiting screen, not the session — require myStatus === 'approved'.

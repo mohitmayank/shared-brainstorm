@@ -19,6 +19,13 @@ export const newTicketId = (): TicketId => mint('sb_t_') as TicketId;
 export const newQuestionId = (): QuestionId => mint('sb_q_') as QuestionId;
 export const newParticipantId = (): ParticipantId => mint('sb_p_') as ParticipantId;
 
+/**
+ * High-entropy coordinator token. Empty prefix + length 22 yields 22 chars of
+ * the 64-char ALPHABET ≈ 132 bits of entropy (log2(64) × 22), exceeding the
+ * 110-bit target in CONTEXT.md. Minted once per session in SessionManager.start().
+ */
+export const newCoordinatorToken = (): string => mint('', 22);
+
 export function newJoinCode(): string {
   // 6-digit numeric, leading zero allowed
   const n = randomBytes(4).readUInt32BE(0) % 1_000_000;

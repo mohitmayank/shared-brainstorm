@@ -11,6 +11,10 @@ export const StartSessionOutput = z.object({
   join_code: z.string().regex(/^\d{6}$/),
   invite_text: z.string(),
   clipboard_copied: z.boolean(),
+  // Phase 3 (COORD-01): one-time URL the human initiator opens to drive the
+  // session from a coordinator browser view. REQUIRED (additive, wire-back-compat:
+  // older clients ignore unknown fields). MUST NOT be embedded in invite_text.
+  coordinator_url: z.string().url(),
 });
 export type StartSessionOutput = z.infer<typeof StartSessionOutput>;
 

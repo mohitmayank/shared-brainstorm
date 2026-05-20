@@ -5,6 +5,7 @@ import {
   newQuestionId,
   newParticipantId,
   newJoinCode,
+  newCoordinatorToken,
 } from './ids.js';
 
 describe('id minting', () => {
@@ -43,5 +44,21 @@ describe('newJoinCode', () => {
   it('produces varying codes across calls', () => {
     const codes = new Set(Array.from({ length: 100 }, () => newJoinCode()));
     expect(codes.size).toBeGreaterThan(50);
+  });
+});
+
+describe('newCoordinatorToken', () => {
+  it('mints a 22-character token', () => {
+    expect(newCoordinatorToken()).toHaveLength(22);
+  });
+
+  it('only contains characters from the ALPHABET set', () => {
+    for (let i = 0; i < 50; i++) {
+      expect(newCoordinatorToken()).toMatch(/^[A-Za-z0-9_-]{22}$/);
+    }
+  });
+
+  it('produces a different token on consecutive mints', () => {
+    expect(newCoordinatorToken()).not.toBe(newCoordinatorToken());
   });
 });

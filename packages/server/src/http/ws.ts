@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { ClientCommand, type ServerEvent } from '@shared-brainstorm/shared';
 import type { SessionManager } from '../session/SessionManager.js';
 
@@ -40,6 +41,22 @@ interface Subscriber {
   send: (s: string) => void;
   close: (r?: string) => void;
   lastSeen: number;
+  /**
+   * WR-02: true for coordinator connections (synthetic `coordinator:` id, no
+   * participant identity). Used by the heartbeat revocation guard below.
+   */
+  isCoordinator: boolean;
+  /**
+   * WR-02: the `session_id` observed when this subscriber connected. Coordinator
+   * subscribers are never re-validated against the live token after connect, so
+   * if the session is stopped (and possibly a new one started with a new token),
+   * a still-open coordinator socket from the prior session would keep receiving
+   * broadcasts. The heartbeat guard drops it when this id no longer matches the
+   * active session (or no session is active). `closeAll('session_ended')` still
+   * handles the normal `stopSession` teardown; this guard is the belt-and-braces
+   * path for a coordinator socket that outlives `closeAll` (e.g. crash/restart).
+   */
+  sessionId: string | null;
 }
 
 export function createWsRouter({
@@ -57,9 +74,32 @@ export function createWsRouter({
 }): WsRouter {
   const subs = new Set<Subscriber>();
 
+  // WR-02: best-effort liveness/identity check for the active session id so the
+  // heartbeat can revoke coordinator subscribers whose session is gone. Returns
+  // null when no session is active.
+  const activeSessionId = (): string | null => {
+    if (!manager.isActive()) return null;
+    try {
+      return manager.sessionView().session_id;
+    } catch {
+      return null;
+    }
+  };
+
   const beat = setIntervalFn(() => {
     const now = Date.now();
+    const liveSessionId = activeSessionId();
     for (const s of subs) {
+      // WR-02: revoke coordinator subscribers whose originating session is no
+      // longer the active one (session ended, or a new session started with a
+      // new token). Without this, a coordinator socket that outlived `closeAll`
+      // would keep receiving broadcasts for a session it was never authorized
+      // against.
+      if (s.isCoordinator && s.sessionId !== liveSessionId) {
+        s.close('session_ended');
+        subs.delete(s);
+        continue;
+      }
       try {
         s.send(JSON.stringify({ type: 'heartbeat' }));
       } catch {
@@ -96,10 +136,18 @@ export function createWsRouter({
         ? null
         : v.participants.find((p) => p.id === cookieParticipantId)!;
       const sub: Subscriber = {
-        participantId: me ? me.id : `coordinator:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+        // WR-05: crypto-random suffix (not Math.random) so the synthetic
+        // coordinator id is collision-free even across rapid reconnects within
+        // the same millisecond. Guards any future logic that keys on
+        // Subscriber.participantId (dedup / targeted send) from mis-routing.
+        participantId: me ? me.id : `coordinator:${randomUUID()}`,
         send,
         close,
         lastSeen: Date.now(),
+        isCoordinator,
+        // WR-02: stamp the originating session id so the heartbeat can revoke
+        // this subscriber if the session is torn down out from under it.
+        sessionId: v.session_id,
       };
       subs.add(sub);
 

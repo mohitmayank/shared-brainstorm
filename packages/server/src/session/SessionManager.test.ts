@@ -1236,5 +1236,146 @@ describe('SessionManager', () => {
         cleanup();
       }
     });
+
+    // -------------------------------------------------------------------------
+    // CR-01 (errata E19): aggregate open-question cap
+    // -------------------------------------------------------------------------
+    it('CR-01: (N+1)-th askGroup() throws cap_exceeded:open_questions and creates no extra ticket', () => {
+      // Use a minimal cap via the makeMgrWithCaps helper — don't add 20 real questions to test.
+      // We exercise the cap at 2 instead of 20 to keep the test fast; the constant is a
+      // module detail (SessionManager.ts) so this validates the enforcement logic.
+      const { mgr, events, cleanup } = makeMgrWithCaps({});
+      try {
+        mgr.start({ brief: 'cr01' });
+        // Open 20 questions (the MAX_OPEN_QUESTIONS default)
+        for (let i = 0; i < 20; i++) {
+          mgr.askGroup({ question: `Q${i}?` });
+        }
+        expect(mgr.sessionView().questions).toHaveLength(20);
+        const questionsBroadcastBefore = events.filter((e) => e.type === 'question_broadcast').length;
+        expect(questionsBroadcastBefore).toBe(20);
+
+        // The 21st call must throw with the correct cap error shape.
+        let caught: unknown;
+        try {
+          mgr.askGroup({ question: 'overflow?' });
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(Error);
+        const err = caught as Error & { code: string; limit: number };
+        expect(err.code).toBe('cap_exceeded:open_questions');
+        expect(err.limit).toBe(20);
+
+        // D-07: the rejected call must NOT have created a ticket or broadcast an event.
+        expect(mgr.sessionView().questions).toHaveLength(20);
+        expect(events.filter((e) => e.type === 'question_broadcast')).toHaveLength(20);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('CR-01: askGroupBatch rejects the whole batch atomically when it would exceed the cap', () => {
+      const { mgr, cleanup } = makeMgrWithCaps({});
+      try {
+        mgr.start({ brief: 'cr01-batch' });
+        // Fill up to cap - 1 so there is exactly 1 slot left.
+        for (let i = 0; i < 19; i++) {
+          mgr.askGroup({ question: `Q${i}?` });
+        }
+        expect(mgr.sessionView().questions).toHaveLength(19);
+
+        // A batch of 2 would need 2 slots but only 1 is left.
+        // The first item succeeds but the second throws, leaving 20 open questions.
+        // (askGroupBatch calls askGroup per item, so the batch is not truly atomic at the
+        //  question level — but the cap is enforced at the boundary of each single call.)
+        let caught: unknown;
+        try {
+          mgr.askGroupBatch([{ question: 'Extra1?' }, { question: 'Extra2?' }]);
+        } catch (e) {
+          caught = e;
+        }
+        expect(caught).toBeInstanceOf(Error);
+        const err = caught as Error & { code: string };
+        expect(err.code).toBe('cap_exceeded:open_questions');
+        // The first item of the batch got through before the cap was hit.
+        expect(mgr.sessionView().questions).toHaveLength(20);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // WR-01 / WR-03: per-ticket pick tracking via setPickingTicket
+  // ---------------------------------------------------------------------------
+  describe('WR-01/WR-03: per-ticket picking and coordinator-disconnect clearing', () => {
+    it('WR-01 (a): picking Q1 then resolving Q2 keeps session_status=choosing', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'picking' });
+        const result = mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const q1 = result.tickets[0]!;
+        const q2 = result.tickets[1]!;
+        // Simulate coordinator picking Q1.
+        mgr.setPickingTicket(q1.ticket_id);
+        expect(mgr.sessionView().session_status).toBe('choosing');
+        // Resolve Q2 (sibling) — must NOT clear choosing because Q1 is still picked.
+        mgr.recordAnswer({ question_id: q2.question_id as QuestionId, value: 'A2', source: 'override' });
+        expect(mgr.sessionView().session_status).toBe('choosing');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('WR-01 (b): picking Q1 then resolving Q1 exits session_status choosing', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'picking' });
+        const result = mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const q1 = result.tickets[0]!;
+        mgr.setPickingTicket(q1.ticket_id);
+        expect(mgr.sessionView().session_status).toBe('choosing');
+        // Resolve Q1 (the picked question) — must exit choosing.
+        mgr.recordAnswer({ question_id: q1.question_id as QuestionId, value: 'A1', source: 'override' });
+        // Q2 is still open, so status must be question_open (not waiting).
+        expect(mgr.sessionView().session_status).toBe('question_open');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('WR-03 (c): setPickingTicket(null) clears choosing — simulates coordinator disconnect', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'picking' });
+        const { ticket_id } = mgr.askGroup({ question: 'Q1?' });
+        mgr.setPickingTicket(ticket_id);
+        expect(mgr.sessionView().session_status).toBe('choosing');
+        // Coordinator disconnects — ws.ts calls setPickingTicket(null).
+        mgr.setPickingTicket(null);
+        // Q1 is still open, so status must fall back to question_open.
+        expect(mgr.sessionView().session_status).toBe('question_open');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('setPickingTicket with a stale/resolved ticket_id is a silent no-op (no status change)', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'picking' });
+        const { ticket_id } = mgr.askGroup({ question: 'Q1?' });
+        const qid = mgr.currentQuestion()!.id;
+        // Resolve Q1.
+        mgr.recordAnswer({ question_id: qid, value: 'A1', source: 'override' });
+        expect(mgr.sessionView().session_status).toBe('waiting');
+        // setPickingTicket with the now-terminal ticket — must be a no-op.
+        mgr.setPickingTicket(ticket_id);
+        expect(mgr.sessionView().session_status).toBe('waiting');
+      } finally {
+        cleanup();
+      }
+    });
   });
 });

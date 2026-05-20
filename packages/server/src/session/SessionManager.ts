@@ -78,7 +78,25 @@ interface ActiveSession {
    */
   open_questions: Map<QuestionId, Question>;
   ticket_to_question: Map<string, QuestionId>;
+  /**
+   * WR-01 / WR-03: the ticket_id currently being picked by the coordinator
+   * (set by the ws.ts `picking start` handler, cleared on `picking stop` or
+   * coordinator WS disconnect). `deriveSessionStatus` returns 'choosing' only
+   * while this is non-null AND the ticket's question is still open — so
+   * resolving Q2 while Q1 is mid-pick does NOT drop the 'choosing' caption,
+   * and coordinator disconnect clears it so the caption can never stick.
+   */
+  pickingTicketId: string | null;
 }
+
+/**
+ * CR-01 (errata E19): aggregate cap on concurrently-open questions. The per-call
+ * `MAX_BATCH_QUESTIONS` Zod guard only limits a single `askGroupBatch` invocation;
+ * this constant caps the total across ALL open questions (single or batch) so a
+ * rogue AI host cannot grow the Map/tickets/waiters/ring-buffer without bound by
+ * repeatedly calling `askGroup` or `askGroupBatch`.
+ */
+const MAX_OPEN_QUESTIONS = 20;
 
 export class SessionManager {
   private active: ActiveSession | null = null;
@@ -115,6 +133,7 @@ export class SessionManager {
       decisions: [],
       open_questions: new Map<QuestionId, Question>(),
       ticket_to_question: new Map(),
+      pickingTicketId: null,
     };
     return { session_id };
   }
@@ -161,6 +180,15 @@ export class SessionManager {
 
   askGroup(input: AskGroupInput): { ticket_id: string } {
     const a = this.requireActive();
+    // CR-01 (errata E19): aggregate cap — must be checked BEFORE tickets.create()
+    // so a cap rejection never creates a dangling ticket or enters the RingBuffer.
+    if (a.open_questions.size >= MAX_OPEN_QUESTIONS) {
+      throw capError(
+        'cap_exceeded:open_questions',
+        MAX_OPEN_QUESTIONS,
+        `open question cap reached (${MAX_OPEN_QUESTIONS})`,
+      );
+    }
     const ticket = this.tickets.create();
     const normalisedOptions = input.options?.map((o) =>
       o.description !== undefined
@@ -318,7 +346,12 @@ export class SessionManager {
       payload: { question_id: q.id, resolution: q.resolution },
     });
     a.open_questions.delete(args.question_id); // Phase 6: replaced a.current_question = null
-    this.setSessionStatus(this.deriveSessionStatus(true)); // recording ends the pick → exit 'choosing'
+    // WR-01: only clear pickingTicketId when the resolved ticket IS the one being
+    // picked — a sibling resolve must NOT drop the 'choosing' caption for a concurrent pick.
+    if (a.pickingTicketId === q.ticket_id) {
+      a.pickingTicketId = null;
+    }
+    this.setSessionStatus(this.deriveSessionStatus()); // derives fresh status from pickingTicketId
   }
 
   /**
@@ -335,7 +368,8 @@ export class SessionManager {
       this.emit({ type: 'question_cancelled', payload: { question_id: q.id, reason } });
     }
     a.open_questions.clear();
-    this.setSessionStatus(this.deriveSessionStatus(true)); // cancelling ends any pick → exit 'choosing'
+    a.pickingTicketId = null; // WR-01/WR-03: all questions gone → no pick can be active
+    this.setSessionStatus(this.deriveSessionStatus(true)); // exitChoosing=true is belt-and-suspenders
   }
 
   /**
@@ -358,7 +392,8 @@ export class SessionManager {
       });
     }
     a.open_questions.clear();
-    this.setSessionStatus(this.deriveSessionStatus(true)); // timeout ends any pick → exit 'choosing'
+    a.pickingTicketId = null; // WR-01/WR-03: all questions gone → no pick can be active
+    this.setSessionStatus(this.deriveSessionStatus(true)); // exitChoosing=true is belt-and-suspenders
   }
 
   /**
@@ -408,6 +443,18 @@ export class SessionManager {
     return [...(this.active?.open_questions.values() ?? [])][0] ?? null;
   }
 
+  /**
+   * WR-02: returns true when the given ticket_id maps to a question that has
+   * already been resolved/cancelled/timeout — i.e. it is a known ticket in a
+   * terminal state. Used by the HTTP coordinator/answer handler to distinguish
+   * "double-resolve on a known ticket" (→ 409 already_resolved) from "ticket
+   * never existed" (→ 404 ticket_not_found). Throws if no session is active.
+   */
+  isTerminalTicket(ticketId: string): boolean {
+    this.requireActive();
+    return this.terminalQuestions.some((q) => q.ticket_id === ticketId);
+  }
+
   approveParticipant(id: ParticipantId): void {
     const a = this.requireActive();
     const p = a.participants.get(id);
@@ -440,18 +487,52 @@ export class SessionManager {
   }
 
   /**
+   * WR-01 / WR-03: set or clear the ticket currently being picked by the
+   * coordinator. Called by ws.ts on `picking start/stop` and on coordinator
+   * WS disconnect. Derives and applies the new session status immediately.
+   *
+   * `ticketId` non-null: transition to 'choosing' only if the ticket's question
+   * is still open (stale ticket_ids from resolved/cancelled questions are silently
+   * ignored). `ticketId` null: clear the picking state, derive new status.
+   */
+  setPickingTicket(ticketId: string | null): void {
+    const a = this.requireActive();
+    if (ticketId !== null) {
+      // Only enter 'choosing' when the ticket maps to an open question.
+      const qid = a.ticket_to_question.get(ticketId);
+      if (!qid || !a.open_questions.has(qid)) return; // stale ticket — silent no-op
+      a.pickingTicketId = ticketId;
+    } else {
+      a.pickingTicketId = null;
+    }
+    this.setSessionStatus(this.deriveSessionStatus());
+  }
+
+  /**
    * Phase 6 (BATCH-02): derive the aggregate session status from the current
-   * open_questions map. `done` is terminal. `choosing` (set by the coordinator
-   * picking handler in ws.ts) is preserved by default so a concurrent askGroup
-   * does not clobber an in-progress pick — but resolving/cancelling/timing-out a
-   * question ENDS that pick, so those callers pass `exitChoosing: true` to drop
-   * back to question_open/waiting (otherwise the "Coordinator is picking" caption
-   * would stick forever after the answer is recorded — Phase 6 regression fix).
+   * open_questions map.
+   *
+   * WR-01 / WR-03: `choosing` is now derived from `pickingTicketId` rather than
+   * a sticky boolean. The status is 'choosing' only when:
+   *  - `pickingTicketId` is non-null AND
+   *  - the corresponding question is still open.
+   * This means:
+   *  - resolving Q2 while Q1 is mid-pick keeps 'choosing' (Q1 still open).
+   *  - resolving the picked question drops 'choosing' (open_questions.has fails).
+   *  - coordinator disconnect (setPickingTicket(null)) clears the status immediately.
+   * The `exitChoosing` parameter is retained for callers that terminate ALL open
+   * questions (cancelAllOpenQuestions / timeoutCurrentQuestion) and must force-clear
+   * the pick state regardless of which ticket was being picked.
    */
   private deriveSessionStatus(exitChoosing = false): SessionStatus {
     const a = this.requireActive();
     if (a.session_status === 'done') return 'done'; // terminal — cannot regress
-    if (a.session_status === 'choosing' && !exitChoosing) return 'choosing';
+    if (!exitChoosing && a.pickingTicketId !== null) {
+      // 'choosing' only while the picked question is still open.
+      const qid = a.ticket_to_question.get(a.pickingTicketId);
+      if (qid !== undefined && a.open_questions.has(qid)) return 'choosing';
+      // Picked question was resolved/cancelled by another path — fall through.
+    }
     if (a.open_questions.size > 0) return 'question_open';
     return 'waiting';
   }

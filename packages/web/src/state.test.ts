@@ -412,3 +412,68 @@ describe('reduce — question lifecycle', () => {
     expect(next.session?.current_question?.status).toBe('cancelled');
   });
 });
+
+describe('reduce — roomLocked from welcome (WR-01)', () => {
+  // Regression: welcome handlers must project session.locked into roomLocked so
+  // a reloaded coordinator/participant reflects the true lock state immediately
+  // without waiting for a room_locked event that may have aged out of the ring
+  // buffer.
+  const sessionBase = {
+    session_id: 'sb_s_001',
+    brief: 'test session',
+    participants: [],
+    decisions: [],
+    current_question: null,
+  };
+
+  it('ephemeral welcome with locked:true sets roomLocked true', () => {
+    const evt: AnyFrame = {
+      type: 'welcome',
+      payload: {
+        session: { ...sessionBase, locked: true },
+        you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
+        is_coordinator: false,
+      },
+    };
+    const next = reduce(initialState, evt);
+    expect(next.roomLocked).toBe(true);
+  });
+
+  it('ephemeral welcome with locked:false sets roomLocked false', () => {
+    // Start with roomLocked true (from a prior room_locked event), then receive
+    // a welcome with locked:false — must clear the lock flag.
+    const lockedEvt: AnyFrame = {
+      seq: 1,
+      ts: '2026-01-01T00:00:01Z',
+      type: 'room_locked',
+      payload: { locked: true },
+    };
+    const withLock = reduce(initialState, lockedEvt);
+    expect(withLock.roomLocked).toBe(true);
+
+    const welcomeEvt: AnyFrame = {
+      type: 'welcome',
+      payload: {
+        session: { ...sessionBase, locked: false },
+        is_coordinator: true,
+      },
+    };
+    const next = reduce(withLock, welcomeEvt);
+    expect(next.roomLocked).toBe(false);
+  });
+
+  it('seq-carrying (server-event) welcome with locked:true sets roomLocked true', () => {
+    const evt: AnyFrame = {
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: {
+        session: { ...sessionBase, locked: true },
+        you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
+        is_coordinator: false,
+      },
+    };
+    const next = reduce(initialState, evt);
+    expect(next.roomLocked).toBe(true);
+  });
+});

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WireSession, WireParticipant, WireSuggestion } from '../state.js';
 import { postCoordinatorAnswer } from '../lib/api.js';
 import { DecisionsPanel } from '../components/coordinator/DecisionsPanel.js';
@@ -23,6 +23,15 @@ const EMPTY_CARD: CardState = {
   error: null,
 };
 
+/**
+ * WR-06 bounded fallback re-enable for the record button. Long enough that the
+ * `question_resolved` WS event normally flips the card to its resolved variant
+ * first (avoiding the double-POST race that the server rejects with 409), short
+ * enough that the control can never stay permanently stuck if that event never
+ * lands.
+ */
+const RECORD_FALLBACK_REENABLE_MS = 5000;
+
 function nameFor(participants: WireParticipant[], id: string): string {
   return participants.find((p) => p.id === id)?.display_name ?? id;
 }
@@ -38,6 +47,39 @@ function nameFor(participants: WireParticipant[], id: string): string {
 export function Coordinator({ session }: CoordinatorProps) {
   const q = session.current_question;
   const [cards, setCards] = useState<Record<string, CardState>>({});
+
+  // WR-02/WR-03: per-ticket fallback-timer handles. Keyed by ticket so a new
+  // record supersedes its predecessor, a resolved question clears its own
+  // pending timer, and unmount clears every outstanding timer — preventing a
+  // setState-on-unmounted-component path and a stale/pruned-ticket patch.
+  const fallbackTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  const clearFallbackTimer = useCallback((ticketId: string) => {
+    const handle = fallbackTimers.current.get(ticketId);
+    if (handle !== undefined) {
+      clearTimeout(handle);
+      fallbackTimers.current.delete(ticketId);
+    }
+  }, []);
+
+  // Clear all pending timers on unmount.
+  useEffect(() => {
+    const timers = fallbackTimers.current;
+    return () => {
+      for (const handle of timers.values()) clearTimeout(handle);
+      timers.clear();
+    };
+  }, []);
+
+  // When a question is resolved (the reducer flips `current_question` away from
+  // a ticket), clear that ticket's pending fallback timer so it can no longer
+  // patch the now-terminal card.
+  const activeTicketId = q?.ticket_id ?? null;
+  useEffect(() => {
+    for (const ticketId of [...fallbackTimers.current.keys()]) {
+      if (ticketId !== activeTicketId) clearFallbackTimer(ticketId);
+    }
+  }, [activeTicketId, clearFallbackTimer]);
 
   const cardFor = (ticketId: string): CardState => cards[ticketId] ?? EMPTY_CARD;
 
@@ -88,7 +130,18 @@ export function Coordinator({ session }: CoordinatorProps) {
         // race), but short enough that the control can never get permanently
         // stuck. If the resolved event already arrived, the card is in its
         // resolved variant and `recording` is moot.
-        setTimeout(() => patchCard(ticketId, { recording: false }), 5000);
+        //
+        // WR-02/WR-03: supersede any prior timer for this ticket before
+        // scheduling, store the handle so it can be cleared on unmount/resolve,
+        // and self-evict the map entry when the timer fires.
+        clearFallbackTimer(ticketId);
+        fallbackTimers.current.set(
+          ticketId,
+          setTimeout(() => {
+            fallbackTimers.current.delete(ticketId);
+            patchCard(ticketId, { recording: false });
+          }, RECORD_FALLBACK_REENABLE_MS),
+        );
       } catch (e: unknown) {
         const status = (e as { status?: number }).status;
         const msg =
@@ -98,7 +151,7 @@ export function Coordinator({ session }: CoordinatorProps) {
         patchCard(ticketId, { recording: false, error: msg });
       }
     },
-    [patchCard],
+    [patchCard, clearFallbackTimer],
   );
 
   const onRecordSuggestion = useCallback(

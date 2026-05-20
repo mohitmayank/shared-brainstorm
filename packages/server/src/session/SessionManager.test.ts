@@ -557,4 +557,88 @@ describe('SessionManager', () => {
       }
     });
   });
+
+  describe('SessionManager — coordinator token', () => {
+    it('coordinatorToken() returns a 22-char token in the ALPHABET set', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'x' });
+        const token = mgr.coordinatorToken();
+        expect(token).toHaveLength(22);
+        expect(token).toMatch(/^[A-Za-z0-9_-]{22}$/);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('mints a unique token across sessions', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const t1 = mgr.coordinatorToken();
+        mgr.stop('stop_session');
+        mgr.start({ brief: 'b' });
+        const t2 = mgr.coordinatorToken();
+        expect(t1).not.toBe(t2);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('coordinatorToken() throws before start() and after stop()', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        expect(() => mgr.coordinatorToken()).toThrow(/no active session/);
+        mgr.start({ brief: 'a' });
+        mgr.stop('stop_session');
+        expect(() => mgr.coordinatorToken()).toThrow(/no active session/);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('does not leak the token into sessionView()', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const token = mgr.coordinatorToken();
+        expect(JSON.stringify(mgr.sessionView())).not.toContain(token);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('does not leak the token into the transcript', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const token = mgr.coordinatorToken();
+        const p = mgr.addParticipant({ display_name: 'Alice' });
+        mgr.askGroup({ question: 'q?' });
+        const q = mgr.currentQuestion()!;
+        mgr.postSuggestion({ participant_id: p.id, question_id: q.id, value: 'use X' });
+        const { transcript_path } = mgr.stop('stop_session');
+        const parsed = TranscriptV2.parse(JSON.parse(readFileSync(transcript_path, 'utf8')));
+        expect(JSON.stringify(parsed)).not.toContain(token);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('does not leak the token into any RingBuffer event', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const token = mgr.coordinatorToken();
+        const p = mgr.addParticipant({ display_name: 'Alice' });
+        mgr.askGroup({ question: 'q?' });
+        const q = mgr.currentQuestion()!;
+        mgr.postSuggestion({ participant_id: p.id, question_id: q.id, value: 'use X' });
+        mgr.postComment({ participant_id: p.id, question_id: q.id, text: 'thoughts' });
+        expect(mgr.replay(-1).every((e) => !JSON.stringify(e).includes(token))).toBe(true);
+      } finally {
+        cleanup();
+      }
+    });
+  });
 });

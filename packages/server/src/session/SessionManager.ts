@@ -1,5 +1,6 @@
 import {
   newJoinCode,
+  newCoordinatorToken,
   newParticipantId,
   newQuestionId,
   newSessionId,
@@ -58,6 +59,12 @@ interface ActiveSession {
   brief: string;
   started_at: string;
   join_code: string;
+  /**
+   * High-entropy coordinator token. Minted once in start(), dies on stop().
+   * MUST NOT appear in sessionView(), any ServerEvent payload, the transcript,
+   * or logs — it is the only credential gating the coordinator browser view.
+   */
+  coordinator_token: string;
   participants: Map<ParticipantId, Participant>;
   decisions: { question: string; answer: string; question_id: QuestionId }[];
   current_question: Question | null;
@@ -93,6 +100,7 @@ export class SessionManager {
       brief,
       started_at: this.opts.clock.isoNow(),
       join_code: newJoinCode(),
+      coordinator_token: newCoordinatorToken(),
       participants: new Map(),
       decisions: [],
       current_question: null,
@@ -106,6 +114,16 @@ export class SessionManager {
 
   joinCode(): string {
     return this.requireActive().join_code;
+  }
+
+  /**
+   * The session's coordinator token. Mirrors joinCode() semantics: throws
+   * 'no active session' before start() / after stop(). Never broadcast or
+   * serialized — exposed only to the MCP/HTTP layer for URL composition and
+   * cookie verification.
+   */
+  coordinatorToken(): string {
+    return this.requireActive().coordinator_token;
   }
 
   addParticipant(args: { display_name: string }): Participant {

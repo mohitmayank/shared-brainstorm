@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import { buildApp } from './server.js';
 import { createWsRouter } from './ws.js';
 import type { SessionManager } from '../session/SessionManager.js';
-import { readParticipantCookie } from './cookies.js';
+import { readParticipantCookie, readCoordinatorCookie } from './cookies.js';
 
 export interface ListenOpts {
   port: number;
@@ -52,12 +52,25 @@ export async function startHttpServer(args: {
     '/ws',
     upgradeWebSocket((c) => {
       const pid = readParticipantCookie(c);
+      // Concern #6: derive isCoordinator server-side at upgrade time by comparing
+      // the sb_c cookie to the active session's coordinator token. A stale/absent
+      // token (session ended) yields false rather than a thrown 500 (Pitfall 7).
+      // The flag is fixed here at connect and is NEVER re-read from client frames,
+      // so a participant cannot escalate by sending a hello claiming coordinator.
+      const ctok = readCoordinatorCookie(c);
+      let isCoordinator = false;
+      try {
+        isCoordinator = ctok !== null && ctok === args.manager.coordinatorToken();
+      } catch {
+        isCoordinator = false;
+      }
       let conn: { handle: (m: unknown) => void; close: () => void } | null = null;
       let lastSeq: number | null = null;
       return {
         async onOpen(_evt, wsCtx) {
           const connectArgs: Parameters<typeof wsRouter.connect>[0] = {
             cookieParticipantId: pid,
+            isCoordinator,
             send: (s) => wsCtx.send(s),
             close: () => wsCtx.close(),
           };

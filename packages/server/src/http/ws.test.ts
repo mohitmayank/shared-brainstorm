@@ -24,13 +24,13 @@ function setup(opts?: { heartbeatMs?: number; livenessMs?: number }) {
 describe('WS router', () => {
   it('rejects connection without joined cookie', async () => {
     const { router } = setup();
-    const r = await router.acceptOrReject({ cookieParticipantId: null });
+    const r = await router.acceptOrReject({ cookieParticipantId: null, isCoordinator: false });
     expect(r.kind).toBe('reject');
   });
 
   it('rejects connection with unknown participant id', async () => {
     const { router } = setup();
-    const r = await router.acceptOrReject({ cookieParticipantId: 'sb_p_unknown' });
+    const r = await router.acceptOrReject({ cookieParticipantId: 'sb_p_unknown', isCoordinator: false });
     expect(r.kind).toBe('reject');
   });
 
@@ -40,6 +40,7 @@ describe('WS router', () => {
     const sent: Array<{ type: string }> = [];
     const conn = await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: (msg) => sent.push(JSON.parse(msg) as { type: string }),
       close: () => {},
     });
@@ -53,6 +54,7 @@ describe('WS router', () => {
     const sent: Array<{ type: string }> = [];
     await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: (msg) => sent.push(JSON.parse(msg) as { type: string }),
       close: () => {},
     });
@@ -67,6 +69,7 @@ describe('WS router', () => {
     const sent1: Array<{ type: string }> = [];
     await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: (msg) => sent1.push(JSON.parse(msg) as { type: string }),
       close: () => {},
     });
@@ -75,6 +78,7 @@ describe('WS router', () => {
     const sent2: Array<{ type: string }> = [];
     await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: (msg) => sent2.push(JSON.parse(msg) as { type: string }),
       close: () => {},
       lastSeq: 0,
@@ -88,6 +92,7 @@ describe('WS router', () => {
     const p = mgr.addParticipant({ display_name: 'Alice' });
     const conn = await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: () => {},
       close: () => {},
     });
@@ -106,6 +111,7 @@ describe('WS router', () => {
     const p = mgr.addParticipant({ display_name: 'Alice' });
     const conn = await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: () => {},
       close: () => {},
     });
@@ -124,6 +130,7 @@ describe('WS router', () => {
     const p = mgr.addParticipant({ display_name: 'Alice' });
     const conn = await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: () => {},
       close: () => {},
     });
@@ -142,11 +149,93 @@ describe('WS router', () => {
     let closed = false;
     await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: () => {},
       close: () => { closed = true; },
     });
     router.closeAll('done');
     expect(closed).toBe(true);
+  });
+});
+
+describe('coordinator upgrade', () => {
+  it('accepts a coordinator connect (isCoordinator=true, no participant cookie)', async () => {
+    const { router } = setup();
+    const r = await router.acceptOrReject({ cookieParticipantId: null, isCoordinator: true });
+    expect(r.kind).toBe('ok');
+  });
+
+  it('emits welcome with is_coordinator:true and no you for a coordinator connect', async () => {
+    const { router } = setup();
+    const sent: Array<{ type: string; payload?: { is_coordinator?: boolean; you?: unknown } }> = [];
+    const conn = await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: (msg) => sent.push(JSON.parse(msg) as { type: string }),
+      close: () => {},
+    });
+    expect(conn.kind).toBe('ok');
+    const welcome = sent.find((m) => m.type === 'welcome');
+    expect(welcome).toBeTruthy();
+    expect(welcome?.payload?.is_coordinator).toBe(true);
+    expect(welcome?.payload?.you).toBeUndefined();
+  });
+
+  it('emits welcome with is_coordinator:false and you set for a participant connect', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    const sent: Array<{ type: string; payload?: { is_coordinator?: boolean; you?: { id?: string } } }> = [];
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: (msg) => sent.push(JSON.parse(msg) as { type: string }),
+      close: () => {},
+    });
+    expect(conn.kind).toBe('ok');
+    const welcome = sent.find((m) => m.type === 'welcome');
+    expect(welcome?.payload?.is_coordinator).toBe(false);
+    expect(welcome?.payload?.you?.id).toBe(p.id);
+  });
+
+  it('rejects a no-cookie connect (isCoordinator=false, cookieParticipantId=null)', async () => {
+    const { router } = setup();
+    const r = await router.acceptOrReject({ cookieParticipantId: null, isCoordinator: false });
+    expect(r.kind).toBe('reject');
+    if (r.kind === 'reject') expect(r.reason).toBe('not_joined');
+  });
+
+  it('a client hello frame claiming is_coordinator:true does NOT escalate a participant', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    const sent: Array<{ type: string; payload?: { is_coordinator?: boolean } }> = [];
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: (msg) => sent.push(JSON.parse(msg) as { type: string }),
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    // Attacker sends a hello frame asserting coordinator status over the open socket.
+    conn.handle({ type: 'hello', is_coordinator: true });
+    // The connect-time welcome (already sent) is the only source of truth — still false.
+    const welcome = sent.find((m) => m.type === 'welcome');
+    expect(welcome?.payload?.is_coordinator).toBe(false);
+    // No second welcome / no escalation frame was emitted in response to the hello.
+    expect(sent.filter((m) => m.type === 'welcome')).toHaveLength(1);
+  });
+
+  it('a coordinator connection receives broadcasts', async () => {
+    const { router, mgr } = setup();
+    const sent: Array<{ type: string }> = [];
+    await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: (msg) => sent.push(JSON.parse(msg) as { type: string }),
+      close: () => {},
+    });
+    sent.length = 0;
+    mgr.askGroup({ question: 'q?' });
+    expect(sent.find((m) => m.type === 'question_broadcast')).toBeTruthy();
   });
 });
 
@@ -167,6 +256,7 @@ describe('WS heartbeat', () => {
     const sent: Array<{ type: string }> = [];
     await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: (msg) => sent.push(JSON.parse(msg) as { type: string }),
       close: () => {},
     });
@@ -190,6 +280,7 @@ describe('WS heartbeat', () => {
     let closeCalled = false;
     await router.connect({
       cookieParticipantId: p.id,
+      isCoordinator: false,
       send: () => {},
       close: () => { closeCalled = true; },
     });

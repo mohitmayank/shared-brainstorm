@@ -11,14 +11,33 @@ import {
   setTheme,
   type Theme,
 } from './lib/storage.js';
-import { join } from './lib/api.js';
+import { join, postCoordinatorJoin } from './lib/api.js';
 import { connectWs } from './lib/ws.js';
 import type { WsHandle, CloseInfo } from './lib/ws.js';
 import { nextBackoffMs, type BackoffOpts } from './lib/backoff.js';
 import type { AnyFrame } from '@shared-brainstorm/shared';
 import { Join } from './pages/Join.js';
 import { Session } from './pages/Session.js';
+import { Coordinator } from './pages/Coordinator.js';
 import { TunnelBanner } from './components/TunnelBanner.js';
+
+/**
+ * COORD-01: parse `?role=coordinator&token=X` once at module evaluation so the
+ * mount-time effect can branch into the coordinator-join flow (validate the
+ * token, then open the WS) instead of the participant resume flow. Returns the
+ * token only when the role is explicitly `coordinator` and a non-empty token is
+ * present — otherwise the app behaves exactly as the participant build does.
+ */
+function readCoordinatorToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('role') !== 'coordinator') return null;
+  const token = params.get('token');
+  return token && token.length > 0 ? token : null;
+}
+
+/** Local finite-state for the coordinator-join handshake (UI-SPEC States). */
+type CoordinatorStatus = 'validating' | 'invalid' | 'ok';
 
 function buildWsUrl(lastSeq: number): string {
   const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -86,6 +105,21 @@ export function App() {
   const [resuming, setResuming] = useState(true);
   const [needsJoin, setNeedsJoin] = useState(false);
 
+  // COORD-01: coordinator-mode is fixed at mount from the URL. When present we
+  // never show the participant Join form — instead we validate the token and
+  // (on success) open the WS. `coordinatorStatus` drives the Validating /
+  // Token-invalid surfaces (UI-SPEC States table).
+  const coordinatorTokenRef = useRef<string | null>(readCoordinatorToken());
+  const coordinatorMode = coordinatorTokenRef.current !== null;
+  const [coordinatorStatus, setCoordinatorStatus] = useState<CoordinatorStatus>('validating');
+  const [coordinatorInvalidMsg, setCoordinatorInvalidMsg] = useState<{
+    heading: string;
+    body: string;
+  }>({
+    heading: 'Coordinator link is invalid or expired.',
+    body: 'Ask the session host to share a new link.',
+  });
+
   // REL-04 / D-19: count of consecutive close-without-welcome cycles. Drives
   // the exponential backoff schedule and the "Try now" advisory prompt after
   // 5 failures. Reset to 0 on every `welcome` event (successful WS handshake).
@@ -134,6 +168,18 @@ export function App() {
       onClose: (info: CloseInfo) => {
         wsRef.current = null;
         if (info.code === NOT_JOINED_CODE) {
+          if (coordinatorMode) {
+            // UI-SPEC: a coordinator whose sb_c cookie is rejected (1008) must
+            // NOT drop to the participant Join form — show the coordinator-error
+            // card with coordinator-specific copy instead.
+            setResuming(false);
+            setCoordinatorInvalidMsg({
+              heading: 'Coordinator session ended — request a new link.',
+              body: 'Ask the session host to share a new link.',
+            });
+            setCoordinatorStatus('invalid');
+            return;
+          }
           // Cookie was missing/stale — fall back to the Join form.
           setResuming(false);
           setNeedsJoin(true);
@@ -170,9 +216,42 @@ export function App() {
     startWsRef.current(getLastSeq());
   }, []);
 
-  // Try to resume on mount. If there's no cookie / it's stale, the WS will
-  // reject with code 1008 and we'll show the Join form.
+  // On mount: either run the coordinator-join handshake (COORD-01) or the
+  // participant resume flow. For a coordinator we validate the token first and
+  // open the WS only on success — there is no Join form fallback. For a
+  // participant we optimistically resume; a stale cookie yields a 1008 close
+  // that drops to the Join form.
   useEffect(() => {
+    if (coordinatorMode) {
+      let cancelled = false;
+      const token = coordinatorTokenRef.current!;
+      // Pitfall 8: the join response sets the sb_c cookie synchronously, so we
+      // open the WS immediately on success — no setTimeout between join and WS.
+      postCoordinatorJoin(token)
+        .then(() => {
+          if (cancelled) return;
+          setCoordinatorStatus('ok');
+          startWs(getLastSeq());
+        })
+        .catch((e: unknown) => {
+          if (cancelled) return;
+          const status = (e as { status?: number }).status;
+          if (status === 404) {
+            // Pitfall 7 / RESEARCH: distinct copy for an ended session vs a
+            // genuinely bad token.
+            setCoordinatorInvalidMsg({
+              heading: 'Session ended.',
+              body: 'Ask the session host to share a new link.',
+            });
+          }
+          setCoordinatorStatus('invalid');
+        });
+      return () => {
+        cancelled = true;
+        if (wsRef.current) wsRef.current.close();
+        if (reconnectTimer.current !== null) clearTimeout(reconnectTimer.current);
+      };
+    }
     startWs(getLastSeq());
     return () => {
       if (wsRef.current) wsRef.current.close();
@@ -198,6 +277,10 @@ export function App() {
   );
 
   const hasSession = state.session !== null && state.me !== null;
+  // COORD-01: coordinators connect with no participant identity (me === null),
+  // so the participant `hasSession` gate above can never be true for them. Branch
+  // on the server-derived `isCoordinator` flag + a live session instead.
+  const isCoordinatorView = state.session !== null && state.isCoordinator;
 
   return (
     <>
@@ -239,7 +322,18 @@ export function App() {
           </button>
         </div>
       )}
-      {hasSession ? (
+      {isCoordinatorView ? (
+        <Coordinator session={state.session!} isCoordinator />
+      ) : coordinatorMode && coordinatorStatus === 'invalid' ? (
+        <div className="card coordinator-error" data-testid="coordinator-error" role="alert">
+          <h1>{coordinatorInvalidMsg.heading}</h1>
+          <p className="muted">{coordinatorInvalidMsg.body}</p>
+        </div>
+      ) : coordinatorMode ? (
+        <div className="card" style={{ marginTop: '2rem' }}>
+          <p className="muted">Validating coordinator link…</p>
+        </div>
+      ) : hasSession ? (
         <Session session={state.session!} me={state.me!} />
       ) : resuming && !needsJoin ? (
         <div className="card" style={{ marginTop: '2rem' }}>

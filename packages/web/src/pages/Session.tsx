@@ -16,12 +16,18 @@ export function Session({ session, me }: Props) {
         <h1>shared-brainstorm</h1>
         <p style={{ marginBottom: '.5rem' }}>{session.brief}</p>
         <div className="participants">
-          {session.participants.map((p) => (
-            <span key={p.id} className="participant">
-              {p.display_name}
-              {p.id === me.id && <span className="muted"> (you)</span>}
-            </span>
-          ))}
+          {/* WR-03: show only approved participants. Kicked and pending participants
+              are retained in the server's participants array (correct per design),
+              but an approved participant must not see not-yet-approved joiners or
+              removed teammates listed as active. Mirrors Coordinator.tsx filtering. */}
+          {session.participants
+            .filter((p) => p.status === 'approved')
+            .map((p) => (
+              <span key={p.id} className="participant">
+                {p.display_name}
+                {p.id === me.id && <span className="muted"> (you)</span>}
+              </span>
+            ))}
         </div>
       </div>
 

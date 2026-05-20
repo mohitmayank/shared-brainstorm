@@ -41,6 +41,19 @@ async function joinAs(app: ReturnType<typeof buildApp>, mgr: SessionManager, nam
   return { cookie, ...data };
 }
 
+/**
+ * Acquire a valid `sb_c` coordinator cookie by POSTing the active session's
+ * token to the 03-02 `/api/coordinator/join` route, then return the bare
+ * `sb_c=<token>` pair suitable for the `cookie` request header.
+ */
+async function coordinatorCookie(
+  app: ReturnType<typeof buildApp>,
+  mgr: SessionManager,
+): Promise<string> {
+  const res = await app.request('/api/coordinator/join', json({ token: mgr.coordinatorToken() }));
+  return res.headers.get('set-cookie')!.split(';')[0]!;
+}
+
 describe('HTTP API', () => {
   it('GET /api/session returns 401 if not joined', async () => {
     const { app } = setup();
@@ -368,6 +381,173 @@ describe('HTTP API', () => {
       );
       expect(joinRes.status).toBe(200);
       expect(joinRes.headers.get('set-cookie')).toMatch(/sb_p=.*; Secure(?:;|$)/);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // COORD-03 backend / COORD-04 regression: POST /api/coordinator/answer
+  // The route mounts requireCoordinator and reuses the public recordAnswer 1:1.
+  // ---------------------------------------------------------------------------
+  describe('http — POST /api/coordinator/answer', () => {
+    it('200 on valid cookie + matching ticket_id; question becomes resolved', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      // recordAnswer clears current_question on resolution.
+      expect(mgr.sessionView().current_question).toBe(null);
+    });
+
+    it('200: source override value passes through verbatim (no redaction)', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const value = 'use the token sk_live_DEADBEEF and /Users/me/secret path';
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value, source: 'override' }, cookie),
+      );
+      expect(res.status).toBe(200);
+      // The decision recorded by recordAnswer keeps the value verbatim — trusted
+      // initiator input is NOT scrubbed by redactQuestion.
+      const decision = mgr.sessionView().decisions.at(-1)!;
+      expect(decision.answer).toBe(value);
+    });
+
+    it('401 without sb_c cookie — not_coordinator; recordAnswer never reached', async () => {
+      const { app, mgr } = setup();
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'x', source: 'override' }),
+      );
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'not_coordinator' });
+      // The gate stops before recordAnswer — the question is still broadcast.
+      expect(mgr.sessionView().current_question).not.toBe(null);
+      expect(mgr.currentQuestion()!.status).toBe('broadcast');
+    });
+
+    it('401 with present-but-wrong-content sb_c (timingSafeEqual branch)', async () => {
+      const { app, mgr } = setup();
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const len = mgr.coordinatorToken().length;
+      const wrong = `sb_c=${'Z'.repeat(len)}`;
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'x', source: 'override' }, wrong),
+      );
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'not_coordinator' });
+      expect(mgr.currentQuestion()!.status).toBe('broadcast');
+    });
+
+    it('400 on malformed body (bad source enum) with a valid cookie', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'x', source: 'bogus' }, cookie),
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid' });
+      // Question untouched — recordAnswer never called.
+      expect(mgr.currentQuestion()!.status).toBe('broadcast');
+    });
+
+    it('400 on missing value with a valid cookie', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, source: 'override' }, cookie),
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid' });
+    });
+
+    it('404 ticket_not_current when ticket_id is not the current question', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id: 'tk_nonexistent', value: 'x', source: 'override' }, cookie),
+      );
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'ticket_not_current' });
+      expect(mgr.currentQuestion()!.status).toBe('broadcast');
+    });
+
+    it('404 ticket_not_current on a second POST after the question resolved (never 500)', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const first = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
+      );
+      expect(first.status).toBe(200);
+      // recordAnswer nulled current_question, so the loser of the double-pick
+      // race hits the ticket_not_current guard (404) — safely, never a 500.
+      const second = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
+      );
+      expect(second.status).toBe(404);
+      expect(await second.json()).toEqual({ error: 'ticket_not_current' });
+    });
+
+    it('409 already_resolved when recordAnswer throws not-broadcast (current question, status mutated)', async () => {
+      // Genuine 409 branch: the question is still the current_question (ticket
+      // guard passes) but its status is no longer `broadcast`, so recordAnswer
+      // throws `not broadcast`. This is the same-tick double-resolve window
+      // (Pitfall 4) the route maps to 409 instead of a 500. We reproduce it by
+      // wrapping the manager so sessionView still reports the question as current
+      // while recordAnswer surfaces the real not-broadcast throw.
+      const { mgr } = setup();
+      const cookie = await (async () => {
+        const probe = buildApp({ manager: mgr });
+        const res = await probe.request(
+          '/api/coordinator/join',
+          json({ token: mgr.coordinatorToken() }),
+        );
+        return res.headers.get('set-cookie')!.split(';')[0]!;
+      })();
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const cq = mgr.currentQuestion()!;
+      // Force the not-broadcast condition while keeping current_question set.
+      cq.status = 'resolved';
+      const app = buildApp({ manager: mgr });
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'late', source: 'override' }, cookie),
+      );
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'already_resolved' });
+    });
+
+    it('awaitAnswer wakeup: a pending poll resolves after a 200 POST (COORD-04 same TicketStore path)', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      // Start the AI-host-side long-poll BEFORE the coordinator picks.
+      const pending = mgr.awaitAnswer({ ticket_id, timeout_s: 5 });
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
+      );
+      expect(res.status).toBe(200);
+      // Same TicketStore.resolve() that the CLI recordAnswer tool triggers.
+      const out = await pending;
+      expect(out.resolved).toBe(true);
     });
   });
 });

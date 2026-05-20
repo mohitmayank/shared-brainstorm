@@ -68,6 +68,17 @@ export interface UiState {
    * Already-connected browsers see the coordinator's lock toggle flip via this.
    */
   roomLocked: boolean;
+  /**
+   * Server-driven session lifecycle status. Seeded from welcome.session.session_status
+   * and updated by session_status_changed ServerEvents. 'waiting' on initialState.
+   */
+  sessionStatus: 'waiting' | 'question_open' | 'choosing' | 'done';
+  /**
+   * Transient per-actor presence map. Keys are participant_id or '__coordinator'.
+   * Entries are populated by ephemeral presence frames and expired by App.tsx timers.
+   * Never persisted; never replayed on reconnect.
+   */
+  presence: Record<string, { activity: string; expiresAt: number }>;
 }
 
 export const initialState: UiState = {
@@ -80,6 +91,8 @@ export const initialState: UiState = {
   isCoordinator: false,
   myStatus: null,
   roomLocked: false,
+  sessionStatus: 'waiting',
+  presence: {},
 };
 
 function isServerEvent(frame: AnyFrame): frame is ServerEvent {
@@ -350,6 +363,12 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     return { ...state, lastSeq: seq, roomLocked: p.locked };
   }
 
+  // Phase 5: session_status_changed — update session lifecycle status
+  if (type === 'session_status_changed') {
+    const p = payload<{ status: 'waiting' | 'question_open' | 'choosing' | 'done' }>(evt);
+    return { ...state, lastSeq: seq, sessionStatus: p.status };
+  }
+
   return { ...state, lastSeq: seq };
 }
 
@@ -366,6 +385,10 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
       // participant sees the correct lock state immediately without waiting for a
       // room_locked event that may have aged out of the ring buffer.
       roomLocked: evt.payload.session.locked,
+      // Phase 5: seed sessionStatus from authoritative welcome payload so
+      // reconnect/refresh restores the correct status without waiting for
+      // session_status_changed events (which may have aged out of the ring buffer).
+      sessionStatus: evt.payload.session.session_status,
       banner: null,
       // NOTE: do NOT update lastSeq — ephemeral welcome has no seq
     };
@@ -374,8 +397,19 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
   return state;
 }
 
-export function reduce(state: UiState, evt: AnyFrame): UiState {
-  if (isServerEvent(evt)) return applyServerEvent(state, evt);
-  if (isEphemeralFrame(evt)) return applyEphemeralFrame(state, evt);
+/**
+ * Synthetic UI-only action for expiring presence entries via App.tsx timers.
+ * NOT part of AnyFrame or the wire schema — never sent over WebSocket.
+ */
+export type PresenceExpireAction = { type: 'presence_expired'; key: string };
+
+export function reduce(state: UiState, evt: AnyFrame | PresenceExpireAction): UiState {
+  if (evt.type === 'presence_expired') {
+    const next = { ...state.presence };
+    delete next[(evt as PresenceExpireAction).key];
+    return { ...state, presence: next };
+  }
+  if (isServerEvent(evt as AnyFrame)) return applyServerEvent(state, evt as ServerEvent);
+  if (isEphemeralFrame(evt as AnyFrame)) return applyEphemeralFrame(state, evt as EphemeralFrame);
   return state;
 }

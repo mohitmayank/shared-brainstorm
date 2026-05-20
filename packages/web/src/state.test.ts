@@ -1,6 +1,7 @@
 /** @vitest-environment jsdom */
 import { describe, it, beforeAll, expect } from 'vitest';
 import { reduce, initialState } from './state.js';
+import type { PresenceExpireAction } from './state.js';
 import type { AnyFrame } from '@shared-brainstorm/shared';
 
 // AnyFrame uses z.infer which produces plain `string` (not branded) for IDs
@@ -619,5 +620,129 @@ describe('App — classifyCloseReason (CR-02 regression: kick-evasion on reload)
     expect(classifyCloseReason('session_ended')).toBe('unknown');
     expect(classifyCloseReason('stale')).toBe('unknown');
     expect(classifyCloseReason('some_future_reason')).toBe('unknown');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5 (05-02): sessionStatus + presence + PresenceExpireAction
+// ---------------------------------------------------------------------------
+
+describe('reduce — sessionStatus (Phase 5 / PRES-01)', () => {
+  // Test 1: initialState.sessionStatus
+  it('initialState.sessionStatus === "waiting"', () => {
+    expect(initialState.sessionStatus).toBe('waiting');
+  });
+
+  // Test 2: initialState.presence
+  it('initialState.presence deep-equals {}', () => {
+    expect(initialState.presence).toEqual({});
+  });
+
+  // Test 3: session_status_changed sets sessionStatus + advances lastSeq
+  it('session_status_changed with status "question_open" sets sessionStatus and advances lastSeq', () => {
+    const baseState = reduce(initialState, welcomeEphemeral);
+    const evt: AnyFrame = {
+      seq: 20,
+      ts: '2026-01-01T00:00:20Z',
+      type: 'session_status_changed',
+      payload: { status: 'question_open' as const },
+    } as unknown as AnyFrame;
+    const next = reduce(baseState, evt);
+    expect(next.sessionStatus).toBe('question_open');
+    expect(next.lastSeq).toBe(20);
+  });
+
+  // Test 4: session_status_changed does NOT clear other UiState fields
+  it('session_status_changed does NOT clear other UiState fields (session, me, etc. unchanged)', () => {
+    const baseState = reduce(initialState, welcomeEphemeral);
+    const evt: AnyFrame = {
+      seq: 21,
+      ts: '2026-01-01T00:00:21Z',
+      type: 'session_status_changed',
+      payload: { status: 'choosing' as const },
+    } as unknown as AnyFrame;
+    const next = reduce(baseState, evt);
+    expect(next.sessionStatus).toBe('choosing');
+    // Other fields unchanged
+    expect(next.session?.session_id).toBe(baseState.session?.session_id);
+    expect(next.me?.id).toBe(baseState.me?.id);
+    expect(next.isCoordinator).toBe(baseState.isCoordinator);
+    expect(next.roomLocked).toBe(baseState.roomLocked);
+  });
+
+  // Test 5: ephemeral welcome with session.session_status='choosing' sets sessionStatus,
+  // does NOT advance lastSeq
+  it('ephemeral welcome with session.session_status="choosing" sets sessionStatus; does NOT advance lastSeq', () => {
+    const sessionShape = {
+      session_id: 'sb_s_001',
+      brief: 'test session',
+      participants: [],
+      decisions: [],
+      current_question: null,
+      locked: false,
+      session_status: 'choosing' as const,
+    };
+    const evt: AnyFrame = {
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
+        is_coordinator: false,
+      },
+    };
+    const next = reduce(initialState, evt);
+    expect(next.sessionStatus).toBe('choosing');
+    expect(next.lastSeq).toBe(-1); // ephemeral — no seq advancement
+  });
+
+  // Test 6: WR-07 guard — session_status_changed with seq <= lastSeq is dropped
+  it('WR-07: session_status_changed with seq <= lastSeq is dropped (state unchanged)', () => {
+    const baseState = reduce(initialState, welcomeEphemeral);
+    // Advance lastSeq to 25
+    const advanceEvt: AnyFrame = {
+      seq: 25,
+      ts: '2026-01-01T00:00:25Z',
+      type: 'session_status_changed',
+      payload: { status: 'question_open' as const },
+    } as unknown as AnyFrame;
+    const advanced = reduce(baseState, advanceEvt);
+    expect(advanced.lastSeq).toBe(25);
+    expect(advanced.sessionStatus).toBe('question_open');
+
+    // Now dispatch a stale event with seq <= lastSeq (25)
+    const staleEvt: AnyFrame = {
+      seq: 24,
+      ts: '2026-01-01T00:00:24Z',
+      type: 'session_status_changed',
+      payload: { status: 'done' as const },
+    } as unknown as AnyFrame;
+    const result = reduce(advanced, staleEvt);
+    expect(result).toBe(advanced); // same reference — dropped
+    expect(result.sessionStatus).toBe('question_open'); // not changed to 'done'
+  });
+
+  // Test 7: presence_expired removes key from state.presence
+  it('presence_expired with key "p1" removes that key from state.presence', () => {
+    // Seed state with a presence entry
+    const stateWithPresence = {
+      ...initialState,
+      presence: { p1: { activity: 'typing', expiresAt: Date.now() + 4000 } },
+    };
+    const action: PresenceExpireAction = { type: 'presence_expired', key: 'p1' };
+    const next = reduce(stateWithPresence, action);
+    expect(next.presence).toEqual({});
+  });
+
+  // Test 7b: presence_expired on empty presence is safe no-op
+  it('presence_expired on empty presence is a safe no-op', () => {
+    const action: PresenceExpireAction = { type: 'presence_expired', key: 'p1' };
+    const next = reduce(initialState, action);
+    expect(next.presence).toEqual({});
+  });
+
+  // Test 8: reduce() accepts PresenceExpireAction without crashing
+  it('reduce() accepts a PresenceExpireAction directly without crashing', () => {
+    const action: PresenceExpireAction = { type: 'presence_expired', key: 'sb_p_999' };
+    expect(() => reduce(initialState, action)).not.toThrow();
   });
 });

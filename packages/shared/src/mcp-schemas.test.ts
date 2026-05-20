@@ -17,15 +17,27 @@ describe('MCP schemas', () => {
     expect(StartSessionInput.safeParse({ brief: 'auth' }).success).toBe(true);
   });
 
-  it('start_session output includes url, join_code, invite_text, clipboard_copied', () => {
+  it('start_session output includes url, join_code, invite_text, clipboard_copied, coordinator_url', () => {
     const ok = StartSessionOutput.safeParse({
       session_id: 'sb_s_abc',
       public_url: 'https://x.trycloudflare.com',
       join_code: '123456',
       invite_text: 'Hi! Join: …\nJoin code: 123456',
       clipboard_copied: true,
+      coordinator_url: 'https://x.trycloudflare.com/?role=coordinator&token=abc',
     });
     expect(ok.success).toBe(true);
+  });
+
+  it('start_session output requires coordinator_url (Phase 3 COORD-01)', () => {
+    const missing = StartSessionOutput.safeParse({
+      session_id: 'sb_s_abc',
+      public_url: 'https://x.trycloudflare.com',
+      join_code: '123456',
+      invite_text: 'Hi! Join: …\nJoin code: 123456',
+      clipboard_copied: true,
+    });
+    expect(missing.success).toBe(false);
   });
 
   it('ask_group input rejects empty options array (use undefined for free-form)', () => {

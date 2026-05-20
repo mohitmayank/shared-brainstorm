@@ -38,7 +38,7 @@ test('coordinator override: typed answer resolves the question, recorded verbati
     });
 
     // The coordinator tab is still open and ready. Ask a question in-process.
-    const ticket = askGroup({ question: 'Where should we store refresh tokens?' });
+    const ticket = askGroup({ question: 'Where should we store refresh tokens?' }) as { ticket_id: string };
     const card = coordinator.getByTestId(`coordinator-question-${ticket.ticket_id}`);
     await expect(card).toBeVisible({ timeout: 10_000 });
 

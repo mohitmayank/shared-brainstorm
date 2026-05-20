@@ -28,7 +28,7 @@ test('ws reconnect: replay restores state via hello/welcome', async ({ session, 
     // sessionStorage.lastSeq is set on the participant page when the welcome event landed.
     // Emit Q1 so the browser receives a question_broadcast event
     // and sessionStorage.lastSeq advances past the welcome sequence number.
-    const ticket1 = askGroup({ question: 'Q1: smoke check' });
+    const ticket1 = askGroup({ question: 'Q1: smoke check' }) as { ticket_id: string };
     await expect(page.getByText(/Q1: smoke check/)).toBeVisible({ timeout: 8_000 });
 
     // Confirm sessionStorage.lastSeq is set to a positive value.

@@ -481,7 +481,7 @@ describe('HTTP API', () => {
       expect(await res.json()).toEqual({ error: 'invalid' });
     });
 
-    it('404 ticket_not_current when ticket_id is not the current question', async () => {
+    it('404 ticket_not_found when ticket_id is not in open questions', async () => {
       const { app, mgr } = setup();
       const cookie = await coordinatorCookie(app, mgr);
       mgr.askGroup({ question: 'q?' });
@@ -490,7 +490,7 @@ describe('HTTP API', () => {
         json({ ticket_id: 'tk_nonexistent', value: 'x', source: 'override' }, cookie),
       );
       expect(res.status).toBe(404);
-      expect(await res.json()).toEqual({ error: 'ticket_not_current' });
+      expect(await res.json()).toEqual({ error: 'ticket_not_found' });
       expect(mgr.currentQuestion()!.status).toBe('broadcast');
     });
 
@@ -510,7 +510,7 @@ describe('HTTP API', () => {
         json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
       );
       expect(second.status).toBe(404);
-      expect(await second.json()).toEqual({ error: 'ticket_not_current' });
+      expect(await second.json()).toEqual({ error: 'ticket_not_found' });
     });
 
     it('409 already_resolved when recordAnswer throws not-broadcast (current question, status mutated)', async () => {

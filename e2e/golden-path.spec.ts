@@ -20,7 +20,7 @@ test('golden path: 1 participant joins, suggests, AI records', async ({ session,
     });
 
     // Step 4: Ask a question in-process.
-    const ticket = askGroup({ question: 'Where should we store refresh tokens?' });
+    const ticket = askGroup({ question: 'Where should we store refresh tokens?' }) as { ticket_id: string };
 
     // Step 5: Wait for the question to appear in the browser.
     await expect(page.getByText(/Where should we store refresh tokens/)).toBeVisible({

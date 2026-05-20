@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mcpState } from './state.js';
 import {
   startSession,
@@ -11,6 +11,7 @@ import type { Transport, TransportErrorReason } from '../transport/Transport.js'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AskGroupUnionInput } from '@shared-brainstorm/shared';
 
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'sb-mcp-'));
@@ -229,7 +230,7 @@ describe('askGroup', () => {
         { brief: 'brainstorm' },
         { transportFactory: 'mock', transcriptDir: dir },
       );
-      const result = askGroup({ question: 'Which approach do you prefer?' });
+      const result = askGroup({ question: 'Which approach do you prefer?' }) as { ticket_id: string };
       expect(result.ticket_id).toMatch(/^sb_t_/);
       // Question lands in 'broadcast' (not 'preview') status.
       expect(mcpState.manager!.currentQuestion()?.status).toBe('broadcast');
@@ -248,7 +249,7 @@ describe('awaitAnswer', () => {
       const mgr = mcpState.manager!;
       const alice = mgr.addParticipant({ display_name: 'Alice' });
       const bob = mgr.addParticipant({ display_name: 'Bob' });
-      const { ticket_id } = askGroup({ question: 'Which approach?' });
+      const { ticket_id } = askGroup({ question: 'Which approach?' }) as { ticket_id: string };
       const qid = mgr.currentQuestion()!.id;
       mgr.postSuggestion({ participant_id: alice.id, question_id: qid, value: 'X' });
       mgr.postComment({ participant_id: bob.id, question_id: qid, text: 'maybe Y' });
@@ -271,7 +272,7 @@ describe('awaitAnswer', () => {
     const dir = makeTmpDir();
     try {
       await startSession({ brief: 'b' }, { transportFactory: 'mock', transcriptDir: dir });
-      const { ticket_id } = askGroup({ question: 'Which approach?' });
+      const { ticket_id } = askGroup({ question: 'Which approach?' }) as { ticket_id: string };
 
       // Resolve in the background.
       setTimeout(() => {
@@ -292,7 +293,7 @@ describe('recordAnswer', () => {
     const dir = makeTmpDir();
     try {
       await startSession({ brief: 'b' }, { transportFactory: 'mock', transcriptDir: dir });
-      const { ticket_id } = askGroup({ question: 'Pick one' });
+      const { ticket_id } = askGroup({ question: 'Pick one' }) as { ticket_id: string };
       const out = recordAnswer({ ticket_id, value: 'Postgres', source: 'override' });
       expect(out.ok).toBe(true);
       expect(mcpState.manager!.sessionView().decisions).toEqual([
@@ -312,11 +313,101 @@ describe('recordAnswer', () => {
       askGroup({ question: 'q?' });
       expect(() =>
         recordAnswer({ ticket_id: 'sb_t_bogus', value: 'A', source: 'override' }),
-      ).toThrow(/does not match the current question/);
+      ).toThrow(/not found in open questions/);
     } finally {
       await stopSession().catch(() => null);
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('tools.recordAnswer with ticket_id matching an open question resolves successfully', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'b' }, { transportFactory: 'mock', transcriptDir: dir });
+      const result = askGroup({ question: 'Pick one' }) as { ticket_id: string };
+      const out = recordAnswer({ ticket_id: result.ticket_id, value: 'Postgres', source: 'override' });
+      expect(out.ok).toBe(true);
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6: AskGroupUnionInput schema tests
+// ---------------------------------------------------------------------------
+describe('Phase 6: AskGroupUnionInput schema (BATCH-01)', () => {
+  it('AskGroupUnionInput.parse({question:Q1}) succeeds and produces AskGroupInput shape (back-compat)', () => {
+    const result = AskGroupUnionInput.parse({ question: 'Q1' });
+    expect((result as Record<string, unknown>)['question']).toBe('Q1');
+    expect((result as Record<string, unknown>)['questions']).toBeUndefined();
+  });
+
+  it('AskGroupUnionInput.parse({questions:[{question:Q1},{question:Q2}]}) succeeds and questions has length 2', () => {
+    const result = AskGroupUnionInput.parse({ questions: [{ question: 'Q1' }, { question: 'Q2' }] });
+    expect((result as Record<string, unknown>)['questions']).toHaveLength(2);
+  });
+
+  it('AskGroupUnionInput.parse({questions:[...11 items...]}) throws ZodError (max=10 cap)', () => {
+    const items = Array.from({ length: 11 }, (_, i) => ({ question: `Q${i}` }));
+    expect(() => AskGroupUnionInput.parse({ questions: items })).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6: tools.askGroup batch path (BATCH-01)
+// ---------------------------------------------------------------------------
+describe('Phase 6: askGroup batch (BATCH-01)', () => {
+  it('tools.askGroup({question:Q1}) returns {ticket_id:string} — no tickets field', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'batch' }, { transportFactory: 'mock', transcriptDir: dir });
+      const result = askGroup({ question: 'Q1?' });
+      expect((result as Record<string, unknown>)['ticket_id']).toMatch(/^sb_t_/);
+      expect((result as Record<string, unknown>)['tickets']).toBeUndefined();
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tools.askGroup({questions:[{question:Q1},{question:Q2}]}) returns {tickets:[{question_id,ticket_id},...]}, 2 items', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'batch' }, { transportFactory: 'mock', transcriptDir: dir });
+      const result = askGroup({ questions: [{ question: 'Q1?' }, { question: 'Q2?' }] }) as {
+        tickets: Array<{ question_id: string; ticket_id: string }>;
+      };
+      expect(result.tickets).toHaveLength(2);
+      expect(result.tickets[0]!.question_id).toMatch(/^sb_q_/);
+      expect(result.tickets[0]!.ticket_id).toMatch(/^sb_t_/);
+      expect(result.tickets[1]!.question_id).toMatch(/^sb_q_/);
+      expect(result.tickets[1]!.ticket_id).toMatch(/^sb_t_/);
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tools.askGroup batch calls redactQuestion once per question item (2 questions = 2 redact calls)', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'batch' }, { transportFactory: 'mock', transcriptDir: dir });
+      const redactMod = await import('../redact/redact.js');
+      const spy = vi.spyOn(redactMod, 'redactQuestion');
+      askGroup({ questions: [{ question: 'Q1?' }, { question: 'Q2?' }] });
+      expect(spy).toHaveBeenCalledTimes(2);
+      spy.mockRestore();
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tools.askGroup({question:Q1}) with no active session throws No active session', () => {
+    // mcpState.manager should be null (beforeEach resets it)
+    expect(() => askGroup({ question: 'orphan?' })).toThrow(/No active session/);
   });
 });
 
@@ -473,7 +564,7 @@ describe('transport_failed (REL-03 wiring)', () => {
       );
       expect(mcpState.transportFailed).toBe(false);
       expect(mcpState.lastTransportError).toBeNull();
-      const result = askGroup({ question: 'fresh question?' });
+      const result = askGroup({ question: 'fresh question?' }) as { ticket_id: string };
       expect(result.ticket_id).toMatch(/^sb_t_/);
     } finally {
       await stopSession().catch(() => null);

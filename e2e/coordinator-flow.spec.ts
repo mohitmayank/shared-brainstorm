@@ -52,7 +52,7 @@ test('coordinator flow: participant suggestion → Record this → awaitAnswer u
     await expect(participant.getByText(/you're in!/i)).toBeVisible();
 
     // (h) Ask a question in-process; capture the ticket_id for the testid.
-    const ticket = askGroup({ question: 'Where should we store refresh tokens?' });
+    const ticket = askGroup({ question: 'Where should we store refresh tokens?' }) as { ticket_id: string };
 
     // (i) The question card lands on the coordinator tab.
     const card = coordinator.getByTestId(`coordinator-question-${ticket.ticket_id}`);

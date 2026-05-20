@@ -57,7 +57,7 @@ test('multi-participant: two participants both submit', async ({ session, browse
     ]);
 
     // Step (f): Ask a question in-process (once; both participants see it).
-    const ticket = askGroup({ question: 'Migrations strategy?' });
+    const ticket = askGroup({ question: 'Migrations strategy?' }) as { ticket_id: string };
 
     // Step (g): Wait for the question to appear in BOTH browsers.
     await Promise.all([

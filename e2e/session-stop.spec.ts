@@ -25,7 +25,7 @@ test('session-stop: stopSession writes transcript with ended_reason=stop_session
   }, { timeout: 10_000 });
 
   // Ask a question via in-process MCP tool.
-  const ticket = askGroup({ question: 'Where to host?' });
+  const ticket = askGroup({ question: 'Where to host?' }) as { ticket_id: string };
   expect(ticket.ticket_id).toMatch(/^sb_t_/);
 
   // Wait for the question to appear in the DOM.

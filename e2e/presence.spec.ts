@@ -126,7 +126,7 @@ test.describe('presence indicators', () => {
       });
 
       // Post a question so there is a ticket to pick
-      const ticket = askGroup({ question: 'Which approach?' });
+      const ticket = askGroup({ question: 'Which approach?' }) as { ticket_id: string };
 
       // Wait for the question card to arrive on the coordinator
       const card = coordinator.getByTestId(`coordinator-question-${ticket.ticket_id}`);

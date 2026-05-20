@@ -63,7 +63,7 @@ describe('Full integration: start → join → ask → suggest → record → st
         { label: 'SQLCipher', description: 'App-level control' },
       ],
       recommendation: 'Keychain',
-    });
+    }) as { ticket_id: string };
     expect(ticket.ticket_id).toMatch(/^sb_t_/);
     expect(mgr.currentQuestion()!.status).toBe('broadcast');
 
@@ -157,11 +157,14 @@ describe('Full integration: start → join → ask → suggest → record → st
     expect(body.participants).toHaveLength(1);
   });
 
-  it('handles BUSY when asking while question is in flight', async () => {
+  it('Phase 6: allows concurrent questions — no BUSY error when asking while question is in flight', async () => {
     await startSession({ brief: 'test' }, { transportFactory: 'mock' });
 
+    // Phase 6 (BATCH-02): concurrent questions are allowed; second askGroup must NOT throw BUSY
     askGroup({ question: 'first?' });
-    expect(() => askGroup({ question: 'second?' })).toThrow(/BUSY/);
+    expect(() => askGroup({ question: 'second?' })).not.toThrow();
+    // Both questions should be open
+    expect(mcpState.manager!.sessionView().questions).toHaveLength(2);
   });
 
   it('redaction strips paths from questions', async () => {

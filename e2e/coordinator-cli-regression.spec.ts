@@ -56,7 +56,7 @@ test('CLI-only regression: full brainstorm resolves via MCP recordAnswer, no coo
     await expect(participant.getByTestId('join-empty-cta')).toBeVisible({ timeout: 10_000 });
 
     // CLI path: ask the question in-process.
-    const ticket = askGroup({ question: 'Which migration tool?' });
+    const ticket = askGroup({ question: 'Which migration tool?' }) as { ticket_id: string };
     await expect(participant.getByText(/Which migration tool/)).toBeVisible({ timeout: 10_000 });
 
     // Participant submits a suggestion.

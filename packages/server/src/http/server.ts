@@ -230,15 +230,16 @@ export function buildApp({
   app.post('/api/coordinator/answer', requireCoordinator, async (c) => {
     const parsed = CoordinatorAnswerBody.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'invalid' }, 400);
-    let cq: ReturnType<typeof manager.sessionView>['current_question'];
+    // Phase 6: look up in questions[] by ticket_id (supports N concurrent open questions)
+    let cq: ReturnType<typeof manager.sessionView>['questions'][number] | undefined;
     try {
-      cq = manager.sessionView().current_question;
+      cq = manager.sessionView().questions.find((q) => q.ticket_id === parsed.data.ticket_id);
     } catch {
       // Session torn down between the cookie gate and this read.
       return c.json({ error: 'session_ended' }, 404);
     }
-    if (!cq || cq.ticket_id !== parsed.data.ticket_id) {
-      return c.json({ error: 'ticket_not_current' }, 404);
+    if (!cq) {
+      return c.json({ error: 'ticket_not_found' }, 404); // Phase 6: renamed from ticket_not_current
     }
     try {
       manager.recordAnswer({
@@ -251,7 +252,12 @@ export function buildApp({
       const msg = (e as Error).message;
       // Double-resolve race (Pitfall 4): a second pick for an already-resolved
       // question maps to 409, never a 500.
-      if (msg.includes('no matching') || msg.includes('not broadcast')) {
+      if (
+        msg.includes('no matching') ||
+        msg.includes('not broadcast') ||
+        msg.includes('not open') ||
+        msg.includes('no open question')
+      ) {
         return c.json({ error: 'already_resolved' }, 409);
       }
       throw e;

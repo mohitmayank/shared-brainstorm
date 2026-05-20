@@ -16,6 +16,7 @@ const welcomeEphemeral: AnyFrame = {
         { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
       ],
       decisions: [],
+      questions: [], // Phase 6 (BATCH-02)
       current_question: null,
       locked: false,
       session_status: 'waiting' as const,
@@ -42,6 +43,7 @@ describe('reduce — isCoordinator', () => {
     brief: 'test session',
     participants: [],
     decisions: [],
+    questions: [] as never[], // Phase 6 (BATCH-02)
     current_question: null,
     locked: false,
     session_status: 'waiting' as const,
@@ -426,6 +428,7 @@ describe('reduce — roomLocked from welcome (WR-01)', () => {
     brief: 'test session',
     participants: [],
     decisions: [],
+    questions: [] as never[], // Phase 6 (BATCH-02)
     current_question: null,
     session_status: 'waiting' as const,
   };
@@ -562,6 +565,7 @@ describe('reduce — participant_status_changed (Phase 4 / CR-02 regression)', (
             },
           ],
           decisions: [],
+          questions: [] as never[], // Phase 6 (BATCH-02)
           current_question: null,
           locked: false,
           session_status: 'waiting' as const,
@@ -678,6 +682,7 @@ describe('reduce — sessionStatus (Phase 5 / PRES-01)', () => {
       brief: 'test session',
       participants: [],
       decisions: [],
+      questions: [] as never[], // Phase 6 (BATCH-02)
       current_question: null,
       locked: false,
       session_status: 'choosing' as const,
@@ -718,6 +723,7 @@ describe('reduce — sessionStatus (Phase 5 / PRES-01)', () => {
           brief: 'test session',
           participants: [],
           decisions: [],
+          questions: [] as never[], // Phase 6 (BATCH-02)
           current_question: null,
           locked: false,
           session_status: 'question_open' as const,

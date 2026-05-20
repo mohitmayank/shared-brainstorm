@@ -6,6 +6,8 @@ import {
   StartSessionInput,
   AskGroupInput,
   AskGroupOutput,
+  AskGroupUnionInput,
+  AskGroupBatchOutput,
   AwaitAnswerInput,
   AwaitAnswerOutput,
   RecordAnswerInput,
@@ -327,7 +329,7 @@ export async function startSession(
 // askGroup
 // ---------------------------------------------------------------------------
 
-export function askGroup(raw: unknown): AskGroupOutput {
+export function askGroup(raw: unknown): AskGroupOutput | AskGroupBatchOutput {
   if (!mcpState.manager) throw new Error('No active session. Call startSession first.');
 
   // REL-03 / D-09 gate: if the transport has permanently failed, short-circuit
@@ -344,10 +346,19 @@ export function askGroup(raw: unknown): AskGroupOutput {
     );
   }
 
-  const input = AskGroupInput.parse(raw);
-  const redacted = redactQuestion(input);
-  const result = mcpState.manager.askGroup(redacted);
-  return AskGroupOutput.parse(result);
+  const input = AskGroupUnionInput.parse(raw); // Phase 6: union handles both single and batch
+
+  if ('questions' in input) {
+    // Phase 6 (BATCH-01): batch path — redact each question item, call askGroupBatch
+    const redactedItems = input.questions.map((q) => redactQuestion(q));
+    const result = mcpState.manager.askGroupBatch(redactedItems);
+    return AskGroupBatchOutput.parse(result);
+  } else {
+    // Single path — byte-identical to pre-Phase-6 behavior
+    const redacted = redactQuestion(input);
+    const result = mcpState.manager.askGroup(redacted);
+    return AskGroupOutput.parse(result);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -371,10 +382,11 @@ export function recordAnswer(raw: unknown): RecordAnswerOutput {
   const input = RecordAnswerInput.parse(raw);
   const mgr = mcpState.manager;
   const view = mgr.sessionView();
-  const q = view.current_question;
-  if (!q || q.ticket_id !== input.ticket_id) {
+  // Phase 6: look up in questions[] array by ticket_id (supports N concurrent questions)
+  const q = view.questions.find((q) => q.ticket_id === input.ticket_id);
+  if (!q) {
     throw new Error(
-      `record_answer: ticket_id ${input.ticket_id} does not match the current question`,
+      `record_answer: ticket_id ${input.ticket_id} not found in open questions`,
     );
   }
   mgr.recordAnswer({

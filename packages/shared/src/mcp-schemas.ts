@@ -34,6 +34,51 @@ export const AskGroupOutput = z.object({
 });
 export type AskGroupOutput = z.infer<typeof AskGroupOutput>;
 
+// Phase 6 (BATCH-01): additive batch schemas. AskGroupInput and AskGroupOutput
+// are byte-identical to today for the single-question path.
+
+/** Alias for the existing AskGroupInput — single-question path back-compat. */
+export const AskGroupSingleInput = AskGroupInput;
+export type AskGroupSingleInput = AskGroupInput;
+
+/** Maximum number of questions allowed in a single batch call (T-06-01 DoS cap). */
+export const MAX_BATCH_QUESTIONS = 10;
+
+/** One item within a batch askGroup call — same fields as AskGroupInput. */
+export const AskGroupBatchItem = z.object({
+  question: z.string().min(1),
+  options: z.array(AskGroupOption).min(1).optional(),
+  recommendation: z.string().optional(),
+});
+export type AskGroupBatchItem = z.infer<typeof AskGroupBatchItem>;
+
+/** Batch input schema — min(1) allows single-item batch; max(MAX_BATCH_QUESTIONS) enforces DoS cap. */
+export const AskGroupBatchInput = z.object({
+  questions: z.array(AskGroupBatchItem).min(1).max(MAX_BATCH_QUESTIONS),
+});
+export type AskGroupBatchInput = z.infer<typeof AskGroupBatchInput>;
+
+/**
+ * Union of batch and single inputs. Batch MUST be listed first so
+ * {questions:[...]} hits AskGroupBatchInput before AskGroupSingleInput
+ * (which would otherwise succeed via field absence — Zod union picks first match).
+ */
+export const AskGroupUnionInput = z.union([AskGroupBatchInput, AskGroupSingleInput]);
+export type AskGroupUnionInput = z.infer<typeof AskGroupUnionInput>;
+
+/** One element of the batch output tickets array. */
+export const AskGroupBatchOutputItem = z.object({
+  question_id: z.string(),
+  ticket_id: z.string(),
+});
+export type AskGroupBatchOutputItem = z.infer<typeof AskGroupBatchOutputItem>;
+
+/** Batch output — mirrors the tickets array in submission order. */
+export const AskGroupBatchOutput = z.object({
+  tickets: z.array(AskGroupBatchOutputItem),
+});
+export type AskGroupBatchOutput = z.infer<typeof AskGroupBatchOutput>;
+
 export const AwaitAnswerInput = z.object({
   ticket_id: z.string(),
   timeout_s: z.number().int().min(1).max(55).default(50),

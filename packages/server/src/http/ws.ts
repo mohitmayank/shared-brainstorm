@@ -231,26 +231,21 @@ export function createWsRouter({
             // flag fixed at WS upgrade time from sb_c cookie.
             if (!isCoordinator) return;
             if (c.state === 'start') {
-              // T-05-10: race condition guard — only transition to 'choosing' when a
-              // broadcast question exists.
-              // WR-04 fix: also validate that ticket_id matches the *current* question's
-              // ticket_id so this command is scoped to that question rather than coupling
-              // a per-ticket UI action to global session state. Stale ticket_ids from a
-              // prior question (e.g. resolved before picking stop arrived) are ignored.
-              // Note: Phase 6 batch questions will generalise this into a per-ticket map;
-              // for now one active question per session is the invariant, so equality-check
-              // is sufficient.
-              const q = manager.currentQuestion();
-              if (q?.status !== 'broadcast') return;
-              if (q.ticket_id !== c.ticket_id) return; // stale ticket — ignore
+              // Phase 6 (BATCH-01): look up the specific ticket across all open questions.
+              // T-05-10: only transition to 'choosing' when the specified ticket exists
+              // and its question is in 'broadcast' status. Stale ticket_ids (from resolved/
+              // cancelled questions) find nothing → silent return.
+              const q = manager.sessionView().questions.find((q) => q.ticket_id === c.ticket_id);
+              if (!q || q.status !== 'broadcast') return;
               manager.setSessionStatus('choosing');
               manager.broadcastEphemeral({
                 type: 'presence',
                 payload: { actor_kind: 'coordinator', activity: 'picking' },
               });
             } else {
-              // stop: return to question_open if a question is still broadcast
-              if (manager.currentQuestion()?.status === 'broadcast') {
+              // Phase 6: check if any open question remains in 'broadcast' status
+              // (not just the first question as before)
+              if (manager.sessionView().questions.some((q) => q.status === 'broadcast')) {
                 manager.setSessionStatus('question_open');
               }
               manager.broadcastEphemeral({

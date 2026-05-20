@@ -6,6 +6,7 @@ const sessionShape = {
   brief: 'x',
   participants: [],
   decisions: [],
+  questions: [], // Phase 6 (BATCH-02): required field
   current_question: null,
   locked: false,
   session_status: 'waiting' as const,

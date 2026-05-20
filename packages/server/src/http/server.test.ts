@@ -268,4 +268,106 @@ describe('HTTP API', () => {
       expect(lastHeaders!.get('Retry-After')).toBeTruthy();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // COORD-01: POST /api/coordinator/join (cookie + token gate)
+  // ---------------------------------------------------------------------------
+  describe('http — POST /api/coordinator/join', () => {
+    it('200 on valid token, sets sb_c cookie containing the token', async () => {
+      const { app, mgr } = setup();
+      const token = mgr.coordinatorToken();
+      const res = await app.request('/api/coordinator/join', json({ token }));
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      const cookie = res.headers.get('set-cookie');
+      expect(cookie).toMatch(new RegExp(`sb_c=${token}`));
+    });
+
+    it('400 on malformed JSON / missing body', async () => {
+      const { app } = setup();
+      const res = await app.request('/api/coordinator/join', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid' });
+    });
+
+    it('400 on empty token (Zod min(1))', async () => {
+      const { app } = setup();
+      const res = await app.request('/api/coordinator/join', json({ token: '' }));
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid' });
+    });
+
+    it('401 on wrong-length token, sets no cookie', async () => {
+      const { app } = setup();
+      const res = await app.request('/api/coordinator/join', json({ token: 'aaaa' }));
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'not_coordinator' });
+      expect(res.headers.get('set-cookie')).toBe(null);
+    });
+
+    it('401 on same-length wrong-content token (exercises timingSafeEqual), sets no cookie', async () => {
+      const { app, mgr } = setup();
+      const len = mgr.coordinatorToken().length;
+      const wrong = 'Z'.repeat(len);
+      const res = await app.request('/api/coordinator/join', json({ token: wrong }));
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'not_coordinator' });
+      expect(res.headers.get('set-cookie')).toBe(null);
+    });
+
+    it('404 with session_ended when no active session', async () => {
+      const { app, mgr } = setup();
+      const token = mgr.coordinatorToken();
+      mgr.stop('stop_session');
+      const res = await app.request('/api/coordinator/join', json({ token }));
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'session_ended' });
+    });
+
+    it('idempotent double-join — both 200, same cookie value', async () => {
+      const { app, mgr } = setup();
+      const token = mgr.coordinatorToken();
+      const r1 = await app.request('/api/coordinator/join', json({ token }));
+      const r2 = await app.request('/api/coordinator/join', json({ token }));
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      const c1 = r1.headers.get('set-cookie')!.split(';')[0];
+      const c2 = r2.headers.get('set-cookie')!.split(';')[0];
+      expect(c1).toBe(c2);
+    });
+
+    it('cookie posture LAN (secureCookie:false) — no Secure attribute', async () => {
+      const { app, mgr } = setup({ secureCookie: false });
+      const res = await app.request('/api/coordinator/join', json({ token: mgr.coordinatorToken() }));
+      expect(res.status).toBe(200);
+      const cookie = res.headers.get('set-cookie')!;
+      expect(cookie).toMatch(/sb_c=/);
+      expect(cookie).toMatch(/Path=\//);
+      expect(cookie).toMatch(/HttpOnly/);
+      expect(cookie).toMatch(/SameSite=Lax/);
+      expect(cookie).toMatch(/Max-Age=86400/);
+      expect(cookie).not.toMatch(/Secure/);
+    });
+
+    it('cookie posture cloudflared (secureCookie:true) — Secure on both sb_c and sb_p (one thunk)', async () => {
+      const { app, mgr } = setup({ secureCookie: true });
+      // sb_c via coordinator join
+      const coordRes = await app.request(
+        '/api/coordinator/join',
+        json({ token: mgr.coordinatorToken() }),
+      );
+      expect(coordRes.status).toBe(200);
+      expect(coordRes.headers.get('set-cookie')).toMatch(/sb_c=.*; Secure(?:;|$)/);
+      // sb_p via participant join — same buildApp instance, same thunk
+      const joinRes = await app.request(
+        '/api/join',
+        json({ display_name: 'Alice', join_code: mgr.joinCode() }),
+      );
+      expect(joinRes.status).toBe(200);
+      expect(joinRes.headers.get('set-cookie')).toMatch(/sb_p=.*; Secure(?:;|$)/);
+    });
+  });
 });

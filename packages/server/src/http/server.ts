@@ -1,9 +1,15 @@
 import { Hono } from 'hono';
 import type { MiddlewareHandler } from 'hono';
 import { z } from 'zod';
+import { timingSafeEqual } from 'node:crypto';
 import type { SessionManager } from '../session/SessionManager.js';
 import type { Participant, ParticipantId, QuestionId } from '@shared-brainstorm/shared';
-import { readParticipantCookie, setParticipantCookie } from './cookies.js';
+import {
+  readCoordinatorCookie,
+  readParticipantCookie,
+  setCoordinatorCookie,
+  setParticipantCookie,
+} from './cookies.js';
 import { realClock } from '../session/clock.js';
 import {
   rateLimit,
@@ -31,6 +37,10 @@ const SuggestionBody = z.object({
 const CommentBody = z.object({
   question_id: z.string(),
   text: z.string().min(1).max(4000),
+});
+
+const CoordinatorJoinBody = z.object({
+  token: z.string().min(1).max(64),
 });
 
 /**
@@ -131,6 +141,59 @@ export function buildApp({
     c.set('participant', p);
     await next();
   };
+
+  /**
+   * Gates the coordinator-only routes (the answer endpoint lands in Slice 4;
+   * this middleware is declared here but NOT mounted on any route in this
+   * plan). Compares the `sb_c` cookie against the active session's coordinator
+   * token using `node:crypto.timingSafeEqual` behind a length pre-check so the
+   * compare never throws on mismatched buffer lengths (cross-cutting concern 3).
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const requireCoordinator: MiddlewareHandler<AppEnv> = async (c, next) => {
+    const cookie = readCoordinatorCookie(c);
+    if (!cookie) return c.json({ error: 'not_coordinator' }, 401);
+    let expected: string;
+    try {
+      expected = manager.coordinatorToken();
+    } catch {
+      // The session is no longer active (mcpState.manager = null after
+      // stopSession). A late coordinator request after teardown returns 401
+      // with a distinct error code, not a 500.
+      return c.json({ error: 'session_ended' }, 401);
+    }
+    if (cookie.length !== expected.length) {
+      return c.json({ error: 'not_coordinator' }, 401);
+    }
+    if (!timingSafeEqual(Buffer.from(cookie, 'utf8'), Buffer.from(expected, 'utf8'))) {
+      return c.json({ error: 'not_coordinator' }, 401);
+    }
+    await next();
+  };
+
+  // Coordinator authentication. NOT rate-limited — privileged endpoint
+  // (RESEARCH §"Rate limiting"). Distinct error codes let Slice 5 branch copy:
+  // `session_ended` (404) vs `not_coordinator` (401). Naturally idempotent — a
+  // second valid POST re-issues the same cookie value.
+  app.post('/api/coordinator/join', async (c) => {
+    const parsed = CoordinatorJoinBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid' }, 400);
+    let expected: string;
+    try {
+      expected = manager.coordinatorToken();
+    } catch {
+      return c.json({ error: 'session_ended' }, 404);
+    }
+    const supplied = parsed.data.token;
+    if (supplied.length !== expected.length) {
+      return c.json({ error: 'not_coordinator' }, 401);
+    }
+    if (!timingSafeEqual(Buffer.from(supplied, 'utf8'), Buffer.from(expected, 'utf8'))) {
+      return c.json({ error: 'not_coordinator' }, 401);
+    }
+    setCoordinatorCookie(c, supplied, { secure: resolveSecure() });
+    return c.json({ ok: true });
+  });
 
   app.get('/api/session', requireParticipant, (c) => c.json(manager.sessionView()));
 

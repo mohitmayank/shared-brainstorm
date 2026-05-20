@@ -3,6 +3,15 @@
 When the user runs `/shared-brainstorm` or asks to "brainstorm with the team":
 
 1. Call `start_session({ brief: "<topic>" })` and share the returned URL + join code.
+   - `start_session` also returns `coordinator_url` — a one-time URL the initiator (the human) can open in their own browser to drive the session (see suggestions live, pick the final answer). Print it on a line of its own:
+     ```
+     Your coordinator link (only for the initiator):
+     {coordinator_url}
+
+     Share link for teammates:
+     {public_url}   (join code {join_code})
+     ```
+   - **WARNING: do NOT include `coordinator_url` in the message you send to teammates.** Anyone who opens that URL becomes the session coordinator. Share only `public_url` + `join_code` with the team.
 2. For each question:
    - Call `ask_group({ question, options?, recommendation? })` to get a `ticket_id`
    - Loop `await_answer({ ticket_id, timeout_s: 50 })` until `status !== "pending"`

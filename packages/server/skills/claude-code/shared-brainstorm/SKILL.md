@@ -12,7 +12,7 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
    Call `startSession` with a brief description of what you're working on.
    ```
    startSession({ brief: "API rate-limiting strategy" })
-   → { session_id, public_url, join_code }
+   → { session_id, public_url, join_code, coordinator_url }
    ```
    Show the user the public URL and join code so they can share both with the team. Example:
    ```
@@ -20,6 +20,20 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
    Share link: https://abc123.trycloudflare.com
    Join code: 426193
    ```
+
+   ### Output fields
+
+   **`coordinator_url`** — a one-time URL the initiator (you, the human) can open in their own browser to drive the session from a coordinator view (see suggestions in real time, pick the final answer). Print this URL to the initiator on a line of its own — for example:
+
+   ```
+   Your coordinator link (only for the initiator):
+   {coordinator_url}
+
+   Share link for teammates:
+   {public_url}   (join code {join_code})
+   ```
+
+   **WARNING: do NOT include `coordinator_url` in the message you send to teammates.** Anyone who opens that URL becomes the session coordinator. Share only `public_url` + `join_code` with the team.
 
 2. **Ask a question**
    ```

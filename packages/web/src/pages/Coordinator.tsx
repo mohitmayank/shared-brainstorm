@@ -71,14 +71,24 @@ export function Coordinator({ session }: CoordinatorProps) {
       patchCard(ticketId, { recording: true, error: null });
       try {
         await postCoordinatorAnswer({ ticket_id: ticketId, value, source });
-        // WR-03: leave `recording: true` on success. The server has already
-        // resolved the question, so the buttons must stay disabled until the
-        // `question_resolved` WS event flips the card to its resolved variant
-        // via the reducer (controls are gated on `isResolved || recording`).
-        // Clearing `recording` synchronously here reopened a window where a
-        // fast second pick fired a redundant POST that the server rejects with
-        // 409 — surfacing a confusing "already resolved" error on the happy
-        // path. Only the error branch below re-enables the controls.
+        // WR-03: leave `recording: true` on success so the `question_resolved`
+        // WS event can flip the card to its resolved variant via the reducer
+        // (controls are gated on `isResolved || recording`). Clearing
+        // `recording` synchronously here reopened a window where a fast second
+        // pick fired a redundant POST that the server rejects with 409 —
+        // surfacing a confusing "already resolved" error on the happy path.
+        //
+        // WR-06: but `question_resolved` is the *only* re-enable path, so if
+        // that event never lands (WS drop between the 200 and the broadcast,
+        // a reconnect whose replay missed the event after it aged out of the
+        // 500-event RingBuffer, or a backgrounded tab coalescing the frame)
+        // the button stays disabled forever even though the answer WAS
+        // recorded. Add a bounded fallback re-enable: long enough that the
+        // resolved variant normally takes over first (avoiding the double-POST
+        // race), but short enough that the control can never get permanently
+        // stuck. If the resolved event already arrived, the card is in its
+        // resolved variant and `recording` is moot.
+        setTimeout(() => patchCard(ticketId, { recording: false }), 5000);
       } catch (e: unknown) {
         const status = (e as { status?: number }).status;
         const msg =

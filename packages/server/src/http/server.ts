@@ -239,7 +239,19 @@ export function buildApp({
       return c.json({ error: 'session_ended' }, 404);
     }
     if (!cq) {
-      return c.json({ error: 'ticket_not_found' }, 404); // Phase 6: renamed from ticket_not_current
+      // WR-02: distinguish "ticket already resolved" (409) from "ticket never existed" (404).
+      // After recordAnswer(), the question is deleted from open_questions (sessionView().questions
+      // is open-only), so a second pick for a resolved ticket short-circuits here. Check
+      // terminalQuestions via isTerminalTicket() so the coordinator sees the correct 409
+      // "already_resolved" error rather than a confusing 404 "ticket_not_found".
+      try {
+        if (manager.isTerminalTicket(parsed.data.ticket_id)) {
+          return c.json({ error: 'already_resolved' }, 409);
+        }
+      } catch {
+        return c.json({ error: 'session_ended' }, 404);
+      }
+      return c.json({ error: 'ticket_not_found' }, 404);
     }
     try {
       manager.recordAnswer({
@@ -251,7 +263,10 @@ export function buildApp({
     } catch (e) {
       const msg = (e as Error).message;
       // Double-resolve race (Pitfall 4): a second pick for an already-resolved
-      // question maps to 409, never a 500.
+      // question maps to 409, never a 500. This branch covers the same-tick race
+      // where the question is still in open_questions but its status was mutated
+      // externally (e.g. direct test manipulation). In normal flow, isTerminalTicket
+      // above handles the post-delete path.
       if (
         msg.includes('no matching') ||
         msg.includes('not broadcast') ||

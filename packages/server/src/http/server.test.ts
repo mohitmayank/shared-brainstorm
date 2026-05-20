@@ -494,7 +494,7 @@ describe('HTTP API', () => {
       expect(mgr.currentQuestion()!.status).toBe('broadcast');
     });
 
-    it('404 ticket_not_current on a second POST after the question resolved (never 500)', async () => {
+    it('409 already_resolved on a second POST for a known-but-resolved ticket (WR-02 fix)', async () => {
       const { app, mgr } = setup();
       const cookie = await coordinatorCookie(app, mgr);
       const { ticket_id } = mgr.askGroup({ question: 'q?' });
@@ -503,14 +503,16 @@ describe('HTTP API', () => {
         json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
       );
       expect(first.status).toBe(200);
-      // recordAnswer nulled current_question, so the loser of the double-pick
-      // race hits the ticket_not_current guard (404) — safely, never a 500.
+      // WR-02: the second pick on an already-resolved (terminal) ticket must return
+      // 409 already_resolved (coordinator sees the right error copy) rather than
+      // 404 ticket_not_found (which was the regression in Phase 6 before the fix).
+      // isTerminalTicket() distinguishes "resolved ticket" from "never-existed ticket".
       const second = await app.request(
         '/api/coordinator/answer',
         json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
       );
-      expect(second.status).toBe(404);
-      expect(await second.json()).toEqual({ error: 'ticket_not_found' });
+      expect(second.status).toBe(409);
+      expect(await second.json()).toEqual({ error: 'already_resolved' });
     });
 
     it('409 already_resolved when recordAnswer throws not-broadcast (current question, status mutated)', async () => {

@@ -168,6 +168,18 @@ export function App() {
     };
   }, []);
 
+  // WR-02 fix: also sweep all presence timers on terminal session status ('done').
+  // The App is long-lived across session_ended → 'done'; timers for participants
+  // who already left (or for '__coordinator') would otherwise fire up to 6s later
+  // and dispatch presence_expired against an already-closed session, momentarily
+  // mutating presence after the session ended. Clear proactively when done.
+  useEffect(() => {
+    if (state.sessionStatus === 'done') {
+      for (const h of presenceTimers.current.values()) clearTimeout(h);
+      presenceTimers.current.clear();
+    }
+  }, [state.sessionStatus]);
+
   // Phase 5 (PRES-02): send typing activity command to server.
   const sendTyping = useCallback((questionId: string, typingState: 'start' | 'stop') => {
     wsRef.current?.send(JSON.stringify({ type: 'typing', question_id: questionId, state: typingState }));

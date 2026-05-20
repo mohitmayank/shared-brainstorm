@@ -179,11 +179,92 @@ test.describe('presence indicators', () => {
     }
   });
 
-  // PRES-02: typing indicator — wired in Plan 03 when the 'typing' ClientCommand
-  // and server-side ephemeral presence handler are added.
-  test.skip('PRES-02 activity line shows when participant typing', () => {
-    // Stub: implement in Plan 03 after 'typing' ClientCommand and server-side
-    // ephemeral presence handler are wired. The 'typing' WS command, ws.ts case,
-    // and applyEphemeralFrame 'presence' branch are not yet in the codebase.
+  // PRES-02: typing indicator — promoted from stub in Plan 03.
+  test('PRES-02 activity line shows when participant is typing and clears on submit', async ({
+    session,
+    browser,
+  }) => {
+    test.setTimeout(30_000);
+
+    const aliceCtx = await browser.newContext();
+    const bobCtx = await browser.newContext();
+    const coordinatorCtx = await browser.newContext();
+    const alice = await aliceCtx.newPage();
+    const bob = await bobCtx.newPage();
+    const coordinator = await coordinatorCtx.newPage();
+
+    try {
+      // Step (a): Coordinator opens coordinator URL first so they can approve both participants.
+      await coordinator.goto(session.coordinator_url);
+      await expect(coordinator.getByTestId('coordinator-page')).toBeVisible({ timeout: 10_000 });
+
+      // Step (b): Both participants navigate and submit join forms.
+      await Promise.all([alice.goto(session.public_url), bob.goto(session.public_url)]);
+      await Promise.all([
+        expect(alice.getByLabel(/display name/i)).toBeVisible(),
+        expect(bob.getByLabel(/display name/i)).toBeVisible(),
+      ]);
+      await alice.getByLabel(/display name/i).fill('Alice');
+      await alice.getByRole('button', { name: /^continue$/i }).click();
+      await bob.getByLabel(/display name/i).fill('Bob');
+      await bob.getByRole('button', { name: /^continue$/i }).click();
+
+      // Step (c): Wait for both to reach the waiting screen, then approve.
+      await Promise.all([
+        expect(alice.getByTestId('join-waiting')).toBeVisible({ timeout: 10_000 }),
+        expect(bob.getByTestId('join-waiting')).toBeVisible({ timeout: 10_000 }),
+      ]);
+
+      await expect(
+        coordinator.getByRole('button', { name: /approve alice/i }),
+      ).toBeVisible({ timeout: 10_000 });
+      await coordinator.getByRole('button', { name: /approve alice/i }).click();
+
+      await expect(
+        coordinator.getByRole('button', { name: /approve bob/i }),
+      ).toBeVisible({ timeout: 10_000 });
+      await coordinator.getByRole('button', { name: /approve bob/i }).click();
+
+      // Step (d): Wait for both to be in the session.
+      await Promise.all([
+        expect(alice.getByTestId('join-empty-cta')).toBeVisible({ timeout: 10_000 }),
+        expect(bob.getByTestId('join-empty-cta')).toBeVisible({ timeout: 10_000 }),
+      ]);
+
+      // Step (e): Post a question so there is a suggestion input.
+      const { askGroup } = await import('../packages/server/src/mcp/tools.js');
+      askGroup({ question: 'Which database?' });
+
+      // Step (f): Wait for the question to appear on both pages.
+      await Promise.all([
+        expect(alice.getByText(/Which database/)).toBeVisible({ timeout: 10_000 }),
+        expect(bob.getByText(/Which database/)).toBeVisible({ timeout: 10_000 }),
+      ]);
+
+      // Step (g): Get Alice's participant id from the page (data-testid on presence-activity spans).
+      // Alice types in the suggestion box — Bob's page should show the typing indicator.
+      await alice.getByPlaceholder('Your answer').type('Po');
+
+      // Step (h): Bob sees Alice's typing indicator.
+      // We need Alice's participant id to find the correct testid on Bob's page.
+      // The activity spans use data-testid="presence-activity-{participant_id}".
+      // We can find the element that contains the text "is writing…" on Bob's page.
+      await expect(bob.getByText(/is writing…/)).toBeVisible({ timeout: 10_000 });
+
+      // Step (i): Alice submits a suggestion — Bob sees "submitted a suggestion".
+      await alice.getByPlaceholder('Your answer').fill('Postgres');
+      await alice.getByRole('button', { name: /submit/i }).click();
+
+      await expect(bob.getByText(/submitted a suggestion/)).toBeVisible({ timeout: 10_000 });
+
+      // Step (j): Alice does NOT see her own activity line (self-suppressed).
+      // Alice's activity line span for herself should not exist (only rendered for other participants).
+      // The "is writing…" text should not be on Alice's page.
+      await expect(alice.getByText(/is writing…/)).toHaveCount(0);
+    } finally {
+      await aliceCtx.close();
+      await bobCtx.close();
+      await coordinatorCtx.close();
+    }
   });
 });

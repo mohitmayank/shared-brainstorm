@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import type { WireQuestion, WireParticipant } from '../state.js';
 import { postSuggestion, postComment } from '../lib/api.js';
@@ -15,7 +15,7 @@ function nameFor(participants: WireParticipant[], id: string): string {
   return participants.find((p) => p.id === id)?.display_name ?? id;
 }
 
-export function QuestionCard({ question, me, participants, onTyping: _onTyping }: Props) {
+export function QuestionCard({ question, me, participants, onTyping }: Props) {
   const mySuggestion = question.suggestions.find((s) => s.participant_id === me.id);
   const hasOptions = !!(question.options && question.options.length > 0);
 
@@ -25,6 +25,19 @@ export function QuestionCard({ question, me, participants, onTyping: _onTyping }
   const [commentText, setCommentText] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Phase 5 (PRES-02): typing debounce timer ref (T-05-11: at most one pending timeout).
+  const typingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Cleanup on unmount — mirrors Coordinator.tsx fallbackTimers pattern exactly.
+  useEffect(() => {
+    return () => {
+      if (typingTimer.current !== null) {
+        clearTimeout(typingTimer.current);
+        typingTimer.current = null;
+      }
+    };
+  }, []);
 
   // Keep the form in sync if the question changes (e.g. a new round starts).
   useEffect(() => {
@@ -43,6 +56,12 @@ export function QuestionCard({ question, me, participants, onTyping: _onTyping }
   async function handleSuggestion(e: FormEvent) {
     e.preventDefault();
     if (!sugValue.trim()) return;
+    // Phase 5 (PRES-02): stop typing indicator before the API call.
+    onTyping?.(question.id, 'stop');
+    if (typingTimer.current !== null) {
+      clearTimeout(typingTimer.current);
+      typingTimer.current = null;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -137,7 +156,24 @@ export function QuestionCard({ question, me, participants, onTyping: _onTyping }
                 type="text"
                 placeholder="Your answer"
                 value={sugValue}
-                onChange={(e) => setSugValue(e.target.value)}
+                onChange={(e) => {
+                  setSugValue(e.target.value);
+                  // Phase 5 (PRES-02): send typing start + debounce stop after 1.5s idle.
+                  onTyping?.(question.id, 'start');
+                  if (typingTimer.current !== null) clearTimeout(typingTimer.current);
+                  typingTimer.current = setTimeout(() => {
+                    typingTimer.current = null;
+                    onTyping?.(question.id, 'stop');
+                  }, 1500);
+                }}
+                onBlur={() => {
+                  // Phase 5 (PRES-02): stop typing on blur.
+                  onTyping?.(question.id, 'stop');
+                  if (typingTimer.current !== null) {
+                    clearTimeout(typingTimer.current);
+                    typingTimer.current = null;
+                  }
+                }}
                 maxLength={2000}
                 autoFocus
               />

@@ -37,13 +37,16 @@ export function Session({ session, me, sessionStatus, presence, onTyping }: Prop
                     className="presence-activity-line"
                     data-testid={`presence-activity-${p.id}`}
                     aria-live="polite"
+                    aria-hidden={presence[p.id] === undefined ? 'true' : 'false'}
                   >
                     {presence[p.id]?.activity === 'typing' && (
                       <>
                         <span className="presence-typing-dot" aria-hidden="true" />
-                        {p.display_name} is writing…
+                        {p.display_name || p.id} is writing…
                       </>
                     )}
+                    {presence[p.id]?.activity === 'submitted' &&
+                      `${p.display_name || p.id} submitted a suggestion`}
                   </span>
                 )}
               </span>

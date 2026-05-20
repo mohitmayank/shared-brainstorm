@@ -1,8 +1,8 @@
 /** @vitest-environment jsdom */
-import { describe, it, beforeAll, expect } from 'vitest';
+import { describe, it, beforeAll, expect, vi, afterEach } from 'vitest';
 import { reduce, initialState } from './state.js';
 import type { PresenceExpireAction } from './state.js';
-import type { AnyFrame } from '@shared-brainstorm/shared';
+import type { AnyFrame, EphemeralFrame } from '@shared-brainstorm/shared';
 
 // AnyFrame uses z.infer which produces plain `string` (not branded) for IDs
 
@@ -744,5 +744,152 @@ describe('reduce — sessionStatus (Phase 5 / PRES-01)', () => {
   it('reduce() accepts a PresenceExpireAction directly without crashing', () => {
     const action: PresenceExpireAction = { type: 'presence_expired', key: 'sb_p_999' };
     expect(() => reduce(initialState, action)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 5 (05-03): presence EphemeralFrame branch in applyEphemeralFrame
+// ---------------------------------------------------------------------------
+
+describe('reduce — presence EphemeralFrame branch (PRES-02)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // Test 1: typing presence frame updates presence map with correct expiresAt
+  it('presence frame with activity "typing" sets presence[actor_id] with correct expiresAt (dispatch time)', () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+
+    const presenceFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: {
+        actor_kind: 'participant',
+        actor_id: 'sb_p_001',
+        activity: 'typing',
+      },
+    };
+
+    const next = reduce(initialState, presenceFrame);
+    expect(next.presence['sb_p_001']).toBeDefined();
+    expect(next.presence['sb_p_001']?.activity).toBe('typing');
+    // expiresAt must be computed at dispatch time (~now + 4000ms)
+    expect(next.presence['sb_p_001']?.expiresAt).toBeGreaterThanOrEqual(now + 3999);
+    expect(next.presence['sb_p_001']?.expiresAt).toBeLessThanOrEqual(now + 4001);
+  });
+
+  // Test 2: presence frame with activity "idle" REMOVES the entry from presence map
+  it('presence frame with activity "idle" removes the entry from presence map', () => {
+    const stateWithPresence = {
+      ...initialState,
+      presence: { sb_p_001: { activity: 'typing', expiresAt: Date.now() + 4000 } },
+    };
+
+    const idleFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: {
+        actor_kind: 'participant',
+        actor_id: 'sb_p_001',
+        activity: 'idle',
+      },
+    };
+
+    const next = reduce(stateWithPresence, idleFrame);
+    expect(next.presence['sb_p_001']).toBeUndefined();
+    expect(Object.keys(next.presence)).toHaveLength(0);
+  });
+
+  // Test 3: presence EphemeralFrame does NOT update lastSeq (ephemeral — no seq field)
+  it('presence EphemeralFrame does NOT update lastSeq', () => {
+    // First advance lastSeq to a known value
+    const advanced = { ...initialState, lastSeq: 42 };
+
+    const presenceFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: {
+        actor_kind: 'participant',
+        actor_id: 'sb_p_001',
+        activity: 'typing',
+      },
+    };
+
+    const next = reduce(advanced, presenceFrame);
+    expect(next.lastSeq).toBe(42); // lastSeq unchanged — ephemeral, no seq
+  });
+
+  // Test 4: expiresAt computed at dispatch time (inside reduce), not at render time
+  it('expiresAt is computed at dispatch time (inside reduce function), not deferred', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+
+    const presenceFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: {
+        actor_kind: 'participant',
+        actor_id: 'p_test',
+        activity: 'typing',
+      },
+    };
+
+    const next = reduce(initialState, presenceFrame);
+    const dispatchTime = new Date('2026-01-01T00:00:00Z').getTime();
+    expect(next.presence['p_test']?.expiresAt).toBe(dispatchTime + 4000);
+
+    // Advance time — the expiresAt in state must NOT change (it was set at dispatch)
+    vi.advanceTimersByTime(2000);
+    expect(next.presence['p_test']?.expiresAt).toBe(dispatchTime + 4000);
+  });
+
+  // Test 5: suggestion_added sets presence[participant_id].activity === 'submitted' with 6s TTL
+  it('suggestion_added sets presence[participant_id].activity "submitted" with ~6s TTL', () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const baseState = reduce(initialState, welcomeEphemeral);
+
+    const suggestionEvt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:05Z',
+      type: 'suggestion_added',
+      payload: {
+        question_id: 'sb_q_001',
+        suggestion: {
+          id: 'sb_sug_001',
+          participant_id: 'sb_p_001',
+          value: 'Use Redis',
+          at: '2026-01-01T00:00:05Z',
+        },
+      },
+    };
+
+    const next = reduce(baseState, suggestionEvt);
+    expect(next.presence['sb_p_001']).toBeDefined();
+    expect(next.presence['sb_p_001']?.activity).toBe('submitted');
+    // 6s TTL — expiresAt should be approximately now + 6000
+    expect(next.presence['sb_p_001']?.expiresAt).toBeGreaterThanOrEqual(now + 5999);
+    expect(next.presence['sb_p_001']?.expiresAt).toBeLessThanOrEqual(now + 6001);
+  });
+
+  // Test 6: suggestion_added still advances lastSeq (durable ring-buffered event — presence side-effect does NOT suppress seq update)
+  it('suggestion_added advances lastSeq even with presence side-effect (both happen together)', () => {
+    const baseState = reduce(initialState, welcomeEphemeral);
+
+    const suggestionEvt: AnyFrame = {
+      seq: 7,
+      ts: '2026-01-01T00:00:07Z',
+      type: 'suggestion_added',
+      payload: {
+        question_id: 'sb_q_001',
+        suggestion: {
+          id: 'sb_sug_002',
+          participant_id: 'sb_p_001',
+          value: 'Use Postgres',
+          at: '2026-01-01T00:00:07Z',
+        },
+      },
+    };
+
+    const next = reduce(baseState, suggestionEvt);
+    expect(next.lastSeq).toBe(7); // seq advances (durable event)
+    expect(next.presence['sb_p_001']?.activity).toBe('submitted'); // presence side-effect
   });
 });

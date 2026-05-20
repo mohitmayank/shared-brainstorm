@@ -228,29 +228,47 @@ export function App() {
           setWsRetryCount(0);
           wsRetryCountRef.current = 0;
         }
-        // Phase 5 (PRES-02): schedule a TTL sweep for non-idle presence frames.
-        // The 'presence' EphemeralFrame variant is added to the Zod schema in Plan 03;
-        // we use `as unknown` to inspect the type at runtime without a TypeScript error
-        // (the presence handler in the reducer is already in place and handles the frame
-        // when it arrives — this block only sets up the expiry timer).
-        const maybePresence = frame as unknown as {
-          type: string;
-          payload?: { activity?: string; actor_id?: string };
-        };
-        if (
-          maybePresence.type === 'presence' &&
-          maybePresence.payload?.activity !== undefined &&
-          maybePresence.payload.activity !== 'idle'
-        ) {
-          const key = maybePresence.payload.actor_id ?? '__coordinator';
-          const existing = presenceTimers.current.get(key);
+        // Phase 5 (PRES-02): schedule TTL sweeps for ephemeral presence frames.
+        // Narrow through `as unknown` to access presence payload — AnyFrame is a
+        // union of two discriminated unions, and TypeScript cannot pierce both at once.
+        if (frame.type === 'presence') {
+          const presenceFrame = frame as unknown as Extract<
+            import('@shared-brainstorm/shared').EphemeralFrame,
+            { type: 'presence' }
+          >;
+          if (presenceFrame.payload.activity !== 'idle') {
+            const key = presenceFrame.payload.actor_id ?? '__coordinator';
+            const existing = presenceTimers.current.get(key);
+            if (existing !== undefined) clearTimeout(existing);
+            presenceTimers.current.set(
+              key,
+              setTimeout(() => {
+                presenceTimers.current.delete(key);
+                dispatch({ type: 'presence_expired', key } satisfies PresenceExpireAction);
+              }, 4000),
+            );
+          } else {
+            const key = presenceFrame.payload.actor_id ?? '__coordinator';
+            const existing = presenceTimers.current.get(key);
+            if (existing !== undefined) {
+              clearTimeout(existing);
+              presenceTimers.current.delete(key);
+            }
+          }
+        }
+        // Phase 5 (PRES-02): schedule 6s TTL for "submitted" presence derived from durable events.
+        if (frame.type === 'suggestion_added' || frame.type === 'suggestion_updated') {
+          const participantId = (
+            frame as unknown as { payload: { suggestion: { participant_id: string } } }
+          ).payload.suggestion.participant_id;
+          const existing = presenceTimers.current.get(participantId);
           if (existing !== undefined) clearTimeout(existing);
           presenceTimers.current.set(
-            key,
+            participantId,
             setTimeout(() => {
-              presenceTimers.current.delete(key);
-              dispatch({ type: 'presence_expired', key } satisfies PresenceExpireAction);
-            }, 4000),
+              presenceTimers.current.delete(participantId);
+              dispatch({ type: 'presence_expired', key: participantId } satisfies PresenceExpireAction);
+            }, 6000),
           );
         }
       },

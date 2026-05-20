@@ -205,9 +205,16 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
   if (type === 'suggestion_added') {
     if (!state.session) return { ...state, lastSeq: seq };
     const p = payload<{ question_id: string; suggestion: WireSuggestion }>(evt);
+    // Phase 5 (PRES-02): derive "submitted a suggestion" presence indicator with 6s TTL.
+    // The seq update still happens (durable event) — presence side-effect does NOT suppress it.
+    const participantId = p.suggestion.participant_id;
     return {
       ...state,
       lastSeq: seq,
+      presence: {
+        ...state.presence,
+        [participantId]: { activity: 'submitted', expiresAt: Date.now() + 6000 },
+      },
       session: withQuestion(state.session, (q) => {
         if (q.id !== p.question_id) return q;
         const already = q.suggestions.find((s) => s.id === p.suggestion.id);
@@ -220,9 +227,15 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
   if (type === 'suggestion_updated') {
     if (!state.session) return { ...state, lastSeq: seq };
     const p = payload<{ question_id: string; suggestion: WireSuggestion }>(evt);
+    // Phase 5 (PRES-02): also update presence for "submitted" on suggestion_updated.
+    const participantId = p.suggestion.participant_id;
     return {
       ...state,
       lastSeq: seq,
+      presence: {
+        ...state.presence,
+        [participantId]: { activity: 'submitted', expiresAt: Date.now() + 6000 },
+      },
       session: withQuestion(state.session, (q) => {
         if (q.id !== p.question_id) return q;
         return {
@@ -393,6 +406,26 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
       // NOTE: do NOT update lastSeq — ephemeral welcome has no seq
     };
   }
+  // Phase 5 (PRES-02): presence ephemeral frame — update the presence map.
+  // CRITICAL: no lastSeq update — this is ephemeral (no seq field on the frame).
+  // expiresAt computed at dispatch time (inside reducer), NOT at render time.
+  if (evt.type === 'presence') {
+    const { actor_kind, actor_id, activity } = evt.payload;
+    const key = actor_id ?? (actor_kind === 'coordinator' ? '__coordinator' : '__unknown');
+    if (activity === 'idle') {
+      const next = { ...state.presence };
+      delete next[key];
+      return { ...state, presence: next };
+    }
+    return {
+      ...state,
+      presence: {
+        ...state.presence,
+        [key]: { activity, expiresAt: Date.now() + 4000 },
+      },
+    };
+  }
+
   // heartbeat — handled in ws.ts before reaching reducer
   return state;
 }

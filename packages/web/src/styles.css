@@ -214,3 +214,30 @@ ul.suggestions li, ul.comments li {
   border-top: 1px solid var(--border-soft);
 }
 .app-footer a { color: var(--text); }
+
+/* ----- Coordinator view (Phase 3 / 03-05) ----------------------------------
+   All additive on top of existing tokens + .card. No new color values, no new
+   font-faces, no @media rules (UI-SPEC §"New selectors to be added"). */
+.coordinator-header {}
+.coordinator-decisions-panel {}
+.coordinator-question-card {}
+.coordinator-suggestion-row {
+  display: block;
+  padding: .4rem .6rem;
+  background: var(--surface-2);
+  border-radius: 4px;
+  margin-bottom: .3rem;
+  font-size: .9rem;
+  font-weight: 400;
+  cursor: pointer;
+}
+.coordinator-comment-row {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: .4rem .6rem;
+  margin-bottom: .3rem;
+  font-size: .9rem;
+}
+.coordinator-error { color: var(--error); }
+.coordinator-pick-actions { display: flex; gap: .5rem; align-items: center; }
+.coordinator-synth-note { color: var(--text-muted); font-size: .875rem; }

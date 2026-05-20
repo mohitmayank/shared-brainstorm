@@ -17,6 +17,7 @@ const welcomeEphemeral: AnyFrame = {
       decisions: [],
       current_question: null,
       locked: false,
+      session_status: 'waiting' as const,
     },
     you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
     is_coordinator: false,
@@ -42,6 +43,7 @@ describe('reduce — isCoordinator', () => {
     decisions: [],
     current_question: null,
     locked: false,
+    session_status: 'waiting' as const,
   };
 
   const coordinatorWelcome: AnyFrame = {
@@ -424,6 +426,7 @@ describe('reduce — roomLocked from welcome (WR-01)', () => {
     participants: [],
     decisions: [],
     current_question: null,
+    session_status: 'waiting' as const,
   };
 
   it('ephemeral welcome with locked:true sets roomLocked true', () => {
@@ -560,6 +563,7 @@ describe('reduce — participant_status_changed (Phase 4 / CR-02 regression)', (
           decisions: [],
           current_question: null,
           locked: false,
+          session_status: 'waiting' as const,
         },
         you: {
           id: 'sb_p_001',

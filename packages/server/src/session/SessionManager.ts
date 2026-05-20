@@ -11,9 +11,11 @@ import {
   type AwaitAnswerOutput,
   type AnswerSource,
   type ServerEvent,
+  type EphemeralFrame,
   type Participant,
   type Question,
   type SessionView,
+  type SessionStatus,
   type Transcript,
 } from '@shared-brainstorm/shared';
 import { TicketStore } from './tickets.js';
@@ -27,8 +29,9 @@ export interface SessionManagerOpts {
    * Broadcast sink. Optional so SessionManager can be instantiated standalone
    * (tests, MCP-only contexts). Use {@link SessionManager.setBroadcaster} to
    * (re)bind a broadcaster at runtime — typically wired by `startHttpServer`.
+   * Widened to accept EphemeralFrame for the broadcastEphemeral() path.
    */
-  broadcast?: (event: ServerEvent) => void;
+  broadcast?: (event: ServerEvent | EphemeralFrame) => void;
   transcriptDir: string;
   /** REL-07 / D-05: max participants per session. Default 50. */
   maxParticipants?: number;
@@ -65,6 +68,8 @@ interface ActiveSession {
   coordinator_token: string;
   /** Phase 4: whether the room is locked to new participants. */
   locked: boolean;
+  /** Phase 5: server-driven session lifecycle status. */
+  session_status: SessionStatus;
   participants: Map<ParticipantId, Participant>;
   decisions: { question: string; answer: string; question_id: QuestionId }[];
   current_question: Question | null;
@@ -76,7 +81,7 @@ export class SessionManager {
   private tickets: TicketStore;
   private events = new RingBuffer<ServerEvent>(500);
   private nextSeq = 0;
-  private broadcaster: (event: ServerEvent) => void;
+  private broadcaster: (event: ServerEvent | EphemeralFrame) => void;
   private terminalQuestions: Question[] = [];
 
   constructor(private opts: SessionManagerOpts) {
@@ -84,7 +89,7 @@ export class SessionManager {
     this.tickets = new TicketStore(opts.clock);
   }
 
-  setBroadcaster(fn: (event: ServerEvent) => void): void {
+  setBroadcaster(fn: (event: ServerEvent | EphemeralFrame) => void): void {
     this.broadcaster = fn;
   }
 
@@ -101,6 +106,7 @@ export class SessionManager {
       started_at: this.opts.clock.isoNow(),
       coordinator_token: newCoordinatorToken(),
       locked: false,
+      session_status: 'waiting',
       participants: new Map(),
       decisions: [],
       current_question: null,
@@ -172,6 +178,7 @@ export class SessionManager {
     a.current_question = q;
     a.ticket_to_question.set(ticket.id, q.id);
     this.emit({ type: 'question_broadcast', payload: { question: q } });
+    this.setSessionStatus('question_open');
     return { ticket_id: ticket.id };
   }
 
@@ -289,6 +296,7 @@ export class SessionManager {
       payload: { question_id: q.id, resolution: q.resolution },
     });
     a.current_question = null;
+    this.setSessionStatus('waiting');
   }
 
   cancelCurrentQuestion(reason: string): void {
@@ -300,6 +308,7 @@ export class SessionManager {
     this.terminalQuestions.push(q);
     this.emit({ type: 'question_cancelled', payload: { question_id: q.id, reason } });
     a.current_question = null;
+    this.setSessionStatus('waiting');
   }
 
   timeoutCurrentQuestion(): void {
@@ -314,6 +323,7 @@ export class SessionManager {
       payload: { question_id: q.id, reason: 'timeout' },
     });
     a.current_question = null;
+    this.setSessionStatus('waiting');
   }
 
   /**
@@ -394,6 +404,26 @@ export class SessionManager {
     this.emit({ type: 'room_locked', payload: { locked } });
   }
 
+  /**
+   * Idempotent session status transition. Emits session_status_changed only
+   * when the status actually changes. Called by internal lifecycle methods and
+   * by ws.ts (coordinator picking handler) for the 'choosing' transition.
+   */
+  setSessionStatus(status: SessionStatus): void {
+    const a = this.requireActive();
+    if (a.session_status === status) return; // idempotent
+    a.session_status = status;
+    this.emit({ type: 'session_status_changed', payload: { status } });
+  }
+
+  /**
+   * Fans out frame to all connected WS clients. Does NOT enter the RingBuffer
+   * and has no seq — ephemeral only.
+   */
+  broadcastEphemeral(frame: EphemeralFrame): void {
+    this.broadcaster(frame);
+  }
+
   sessionView(): SessionView {
     const a = this.requireActive();
     return {
@@ -403,6 +433,7 @@ export class SessionManager {
       decisions: a.decisions,
       current_question: a.current_question,
       locked: a.locked,
+      session_status: a.session_status,
     };
   }
 
@@ -424,6 +455,7 @@ export class SessionManager {
     const a = this.requireActive();
     const ended_at = this.opts.clock.isoNow();
     if (a.current_question) this.cancelCurrentQuestion(`session_ended:${reason}`);
+    this.setSessionStatus('done');
     this.emit({ type: 'session_ended', payload: { reason } });
 
     const transcript: Transcript = {

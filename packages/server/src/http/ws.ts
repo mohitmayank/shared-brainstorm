@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { ClientCommand, type ServerEvent } from '@shared-brainstorm/shared';
+import { ClientCommand, type ServerEvent, type EphemeralFrame } from '@shared-brainstorm/shared';
 import type { SessionManager } from '../session/SessionManager.js';
 
 export interface WsConnectArgs {
@@ -32,7 +32,7 @@ export interface WsRouter {
     isCoordinator: boolean;
   }): Promise<RejectedConn | { kind: 'ok' }>;
   connect(args: WsConnectArgs): Promise<AcceptedConn | RejectedConn>;
-  broadcast(event: ServerEvent): void;
+  broadcast(event: ServerEvent | EphemeralFrame): void;
   closeAll(reason: string): void;
 }
 

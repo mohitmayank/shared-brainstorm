@@ -12,7 +12,8 @@ const makeMgr = () => {
   const events: ServerEvent[] = [];
   const mgr = new SessionManager({
     clock: fixedClock('2026-04-29T12:00:00Z'),
-    broadcast: (e) => events.push(e),
+    // Durable ServerEvents always carry 'seq'; only push those to the events array.
+    broadcast: (e) => { if ('seq' in e) events.push(e as ServerEvent); },
     transcriptDir: dir,
   });
   return {
@@ -62,7 +63,8 @@ const makeMgrWithCaps = (caps: {
   const events: ServerEvent[] = [];
   const mgr = new SessionManager({
     clock: fixedClock('2026-04-29T12:00:00Z'),
-    broadcast: (e) => events.push(e),
+    // Durable ServerEvents always carry 'seq'; only push those to the events array.
+    broadcast: (e) => { if ('seq' in e) events.push(e as ServerEvent); },
     transcriptDir: dir,
     ...(caps.maxParticipants !== undefined ? { maxParticipants: caps.maxParticipants } : {}),
     ...(caps.maxSuggestionsPerParticipantPerQuestion !== undefined
@@ -391,7 +393,7 @@ describe('SessionManager', () => {
       mgr.addParticipant({ display_name: 'Pre' });
 
       const captured: ServerEvent[] = [];
-      mgr.setBroadcaster((e) => captured.push(e));
+      mgr.setBroadcaster((e) => { if ('seq' in e) captured.push(e as ServerEvent); });
       mgr.addParticipant({ display_name: 'Post' });
       expect(captured.find((e) => e.type === 'participant_joined')).toBeTruthy();
     } finally {

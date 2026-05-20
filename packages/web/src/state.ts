@@ -317,14 +317,13 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
         ? { ...q, status: 'resolved' as const, resolution: p.resolution }
         : q,
     );
-    const firstOpen = updatedQuestions.find((q) => q.status === 'broadcast') ?? null;
     return {
       ...state,
       lastSeq: seq,
       session: {
         ...state.session,
         questions: updatedQuestions,
-        current_question: firstOpen,
+        current_question: firstOpen(updatedQuestions), // WR-05: use unified helper
         decisions:
           newDecision !== null
             ? [...state.session.decisions, newDecision]

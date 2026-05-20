@@ -221,6 +221,19 @@ export class SessionManager {
    * session_status_changed events after the first question_open transition.
    */
   askGroupBatch(inputs: AskGroupInput[]): { tickets: { question_id: string; ticket_id: string }[] } {
+    // CR-01 (errata E19): validate the WHOLE batch against the aggregate cap
+    // BEFORE creating/broadcasting any question. Without this pre-check a batch
+    // that crosses the cap mid-loop would broadcast the earlier questions, then
+    // throw — orphaning live, un-awaitable questions that hold cap slots until
+    // session end. Reject atomically so a partial batch is never created.
+    const a = this.requireActive();
+    if (a.open_questions.size + inputs.length > MAX_OPEN_QUESTIONS) {
+      throw capError(
+        'cap_exceeded:open_questions',
+        MAX_OPEN_QUESTIONS,
+        `open question cap reached (max ${MAX_OPEN_QUESTIONS}; ${a.open_questions.size} open, ${inputs.length} requested)`,
+      );
+    }
     const tickets = inputs.map((input) => {
       const { ticket_id } = this.askGroup(input);
       const a = this.requireActive();
@@ -369,7 +382,7 @@ export class SessionManager {
     }
     a.open_questions.clear();
     a.pickingTicketId = null; // WR-01/WR-03: all questions gone → no pick can be active
-    this.setSessionStatus(this.deriveSessionStatus(true)); // exitChoosing=true is belt-and-suspenders
+    this.setSessionStatus(this.deriveSessionStatus()); // pickingTicketId nulled above → choosing cleared
   }
 
   /**
@@ -393,7 +406,7 @@ export class SessionManager {
     }
     a.open_questions.clear();
     a.pickingTicketId = null; // WR-01/WR-03: all questions gone → no pick can be active
-    this.setSessionStatus(this.deriveSessionStatus(true)); // exitChoosing=true is belt-and-suspenders
+    this.setSessionStatus(this.deriveSessionStatus()); // pickingTicketId nulled above → choosing cleared
   }
 
   /**
@@ -520,14 +533,15 @@ export class SessionManager {
    *  - resolving Q2 while Q1 is mid-pick keeps 'choosing' (Q1 still open).
    *  - resolving the picked question drops 'choosing' (open_questions.has fails).
    *  - coordinator disconnect (setPickingTicket(null)) clears the status immediately.
-   * The `exitChoosing` parameter is retained for callers that terminate ALL open
-   * questions (cancelAllOpenQuestions / timeoutCurrentQuestion) and must force-clear
-   * the pick state regardless of which ticket was being picked.
+   * Callers that terminate ALL open questions (cancelAllOpenQuestions /
+   * timeoutCurrentQuestion) simply null `pickingTicketId` first, so no separate
+   * force-clear parameter is needed — the single source of truth is the pair
+   * (pickingTicketId, open_questions).
    */
-  private deriveSessionStatus(exitChoosing = false): SessionStatus {
+  private deriveSessionStatus(): SessionStatus {
     const a = this.requireActive();
     if (a.session_status === 'done') return 'done'; // terminal — cannot regress
-    if (!exitChoosing && a.pickingTicketId !== null) {
+    if (a.pickingTicketId !== null) {
       // 'choosing' only while the picked question is still open.
       const qid = a.ticket_to_question.get(a.pickingTicketId);
       if (qid !== undefined && a.open_questions.has(qid)) return 'choosing';

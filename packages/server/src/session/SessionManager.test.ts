@@ -1285,10 +1285,10 @@ describe('SessionManager', () => {
         }
         expect(mgr.sessionView().questions).toHaveLength(19);
 
-        // A batch of 2 would need 2 slots but only 1 is left.
-        // The first item succeeds but the second throws, leaving 20 open questions.
-        // (askGroupBatch calls askGroup per item, so the batch is not truly atomic at the
-        //  question level — but the cap is enforced at the boundary of each single call.)
+        // A batch of 2 would need 2 slots but only 1 is left. askGroupBatch
+        // pre-validates the WHOLE batch against the cap BEFORE creating any
+        // ticket, so it rejects ATOMICALLY — NEITHER 'Extra1' NOR 'Extra2' is
+        // created/broadcast (no orphaned, un-awaitable question holding a slot).
         let caught: unknown;
         try {
           mgr.askGroupBatch([{ question: 'Extra1?' }, { question: 'Extra2?' }]);
@@ -1298,8 +1298,8 @@ describe('SessionManager', () => {
         expect(caught).toBeInstanceOf(Error);
         const err = caught as Error & { code: string };
         expect(err.code).toBe('cap_exceeded:open_questions');
-        // The first item of the batch got through before the cap was hit.
-        expect(mgr.sessionView().questions).toHaveLength(20);
+        // Atomic: the open-question count is UNCHANGED — no partial batch landed.
+        expect(mgr.sessionView().questions).toHaveLength(19);
       } finally {
         cleanup();
       }

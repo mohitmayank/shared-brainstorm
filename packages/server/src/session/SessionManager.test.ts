@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ParticipantId } from '@shared-brainstorm/shared';
 import { SessionManager } from './SessionManager.js';
 import { fixedClock } from './clock.js';
 import { TranscriptV2, type ServerEvent } from '@shared-brainstorm/shared';
@@ -552,6 +553,54 @@ describe('SessionManager', () => {
         expect(() =>
           mgr.postComment({ participant_id: first.id, question_id: q.id, text: 'overflow' }),
         ).toThrow(/comment cap/);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  describe('approveParticipant', () => {
+    it('approveParticipant() flips status to approved and emits participant_status_changed', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const p = mgr.addParticipant({ display_name: 'Alice' });
+        expect(p.status).toBe('pending');
+        mgr.approveParticipant(p.id);
+        const view = mgr.sessionView();
+        expect(view.participants[0]!.status).toBe('approved');
+        const changed = events.filter((e) => e.type === 'participant_status_changed');
+        expect(changed).toHaveLength(1);
+        if (changed[0] && changed[0].type === 'participant_status_changed') {
+          const ev = changed[0] as { type: string; payload: { participant_id: string; status: string } };
+          expect(ev.payload.participant_id).toBe(p.id);
+          expect(ev.payload.status).toBe('approved');
+        }
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('approveParticipant() is idempotent when already approved', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const p = mgr.addParticipant({ display_name: 'Alice' });
+        mgr.approveParticipant(p.id);
+        mgr.approveParticipant(p.id); // second call is no-op
+        const changed = events.filter((e) => e.type === 'participant_status_changed');
+        expect(changed).toHaveLength(1);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('approveParticipant() throws on unknown id', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const fakeId = 'p_nonexistent' as ParticipantId;
+        expect(() => mgr.approveParticipant(fakeId)).toThrow(/unknown id/);
       } finally {
         cleanup();
       }

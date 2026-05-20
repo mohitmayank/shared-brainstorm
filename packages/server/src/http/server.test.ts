@@ -558,4 +558,66 @@ describe('HTTP API', () => {
       expect(out.resolved).toBe(true);
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 4 / JOIN-02: POST /api/coordinator/approve
+  // ---------------------------------------------------------------------------
+  describe('POST /api/coordinator/approve', () => {
+    it('returns 200 and ok:true for a pending participant', async () => {
+      const { app, mgr } = setup();
+      const ccookie = await coordinatorCookie(app, mgr);
+      // Join to create a pending participant (do NOT call joinAs which auto-approves)
+      const joinRes = await app.request('/api/join', json({ display_name: 'Pending' }));
+      expect(joinRes.status).toBe(200);
+      const data = (await joinRes.json()) as { id: string; status: string };
+      expect(data.status).toBe('pending');
+      const res = await app.request(
+        '/api/coordinator/approve',
+        json({ participant_id: data.id }, ccookie),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      // Verify the participant's status was actually flipped.
+      expect(mgr.sessionView().participants.find((p) => p.id === data.id)!.status).toBe('approved');
+    });
+
+    it('returns 401 without coordinator cookie', async () => {
+      const { app } = setup();
+      const joinRes = await app.request('/api/join', json({ display_name: 'Pending' }));
+      const data = (await joinRes.json()) as { id: string };
+      const res = await app.request('/api/coordinator/approve', json({ participant_id: data.id }));
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'not_coordinator' });
+    });
+
+    it('returns 404 for unknown participant_id', async () => {
+      const { app, mgr } = setup();
+      const ccookie = await coordinatorCookie(app, mgr);
+      const res = await app.request(
+        '/api/coordinator/approve',
+        json({ participant_id: 'p_does_not_exist' }, ccookie),
+      );
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'not_found' });
+    });
+
+    it('is idempotent — approving twice returns 200 both times', async () => {
+      const { app, mgr } = setup();
+      const ccookie = await coordinatorCookie(app, mgr);
+      const joinRes = await app.request('/api/join', json({ display_name: 'Alice' }));
+      const data = (await joinRes.json()) as { id: string };
+      const r1 = await app.request(
+        '/api/coordinator/approve',
+        json({ participant_id: data.id }, ccookie),
+      );
+      const r2 = await app.request(
+        '/api/coordinator/approve',
+        json({ participant_id: data.id }, ccookie),
+      );
+      expect(r1.status).toBe(200);
+      expect(r2.status).toBe(200);
+      // Only one participant_status_changed event emitted (idempotent).
+      expect(mgr.sessionView().participants.find((p) => p.id === data.id)!.status).toBe('approved');
+    });
+  });
 });

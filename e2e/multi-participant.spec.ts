@@ -2,14 +2,21 @@ import { test, expect } from './fixtures.js';
 import { askGroup, awaitAnswer, recordAnswer } from '../packages/server/src/mcp/tools.js';
 
 test('multi-participant: two participants both submit', async ({ session, browser }) => {
-  // Step (a): Create two independent browser contexts (separate cookie jars).
+  // Step (a): Create two independent participant contexts and one coordinator context.
+  // The coordinator is needed to approve both Alice and Bob (v2.0.0 approval-gate model).
   const aliceCtx = await browser.newContext();
   const bobCtx = await browser.newContext();
+  const coordinatorCtx = await browser.newContext();
   const alice = await aliceCtx.newPage();
   const bob = await bobCtx.newPage();
+  const coordinator = await coordinatorCtx.newPage();
 
   try {
-    // Step (b): Both navigate to the SPA.
+    // Step (b): Coordinator opens their URL first so they are ready to approve.
+    await coordinator.goto(session.coordinator_url);
+    await expect(coordinator.getByTestId('coordinator-page')).toBeVisible({ timeout: 10_000 });
+
+    // Step (c): Both participants navigate to the SPA.
     await Promise.all([alice.goto(session.public_url), bob.goto(session.public_url)]);
 
     // Wait for both Join forms to be visible.
@@ -18,34 +25,47 @@ test('multi-participant: two participants both submit', async ({ session, browse
       expect(bob.getByLabel(/display name/i)).toBeVisible(),
     ]);
 
-    // Alice fills and submits the join form (no join code in v2.0.0).
+    // Alice fills and submits the join form. v2.0.0: button is "Continue", no join code.
     await alice.getByLabel(/display name/i).fill('Alice');
-    await alice.getByRole('button', { name: /join session/i }).click();
+    await alice.getByRole('button', { name: /^continue$/i }).click();
 
     // Bob fills and submits the join form.
     await bob.getByLabel(/display name/i).fill('Bob');
-    await bob.getByRole('button', { name: /join session/i }).click();
+    await bob.getByRole('button', { name: /^continue$/i }).click();
 
-    // Step (c): Wait for both to be in-session.
+    // Both participants land on the waiting-for-approval screen.
     await Promise.all([
-      expect(alice.getByText(/waiting for a question from the ai host/i)).toBeVisible({
-        timeout: 8_000,
-      }),
-      expect(bob.getByText(/waiting for a question from the ai host/i)).toBeVisible({
-        timeout: 8_000,
-      }),
+      expect(alice.getByTestId('join-waiting')).toBeVisible({ timeout: 10_000 }),
+      expect(bob.getByTestId('join-waiting')).toBeVisible({ timeout: 10_000 }),
     ]);
 
-    // Step (d): Ask a question in-process (once; both participants see it).
+    // Step (d): Coordinator approves Alice then Bob.
+    await expect(
+      coordinator.getByRole('button', { name: /approve alice/i }),
+    ).toBeVisible({ timeout: 10_000 });
+    await coordinator.getByRole('button', { name: /approve alice/i }).click();
+
+    await expect(
+      coordinator.getByRole('button', { name: /approve bob/i }),
+    ).toBeVisible({ timeout: 10_000 });
+    await coordinator.getByRole('button', { name: /approve bob/i }).click();
+
+    // Step (e): Wait for both to be in-session (waiting screen gone, empty CTA visible).
+    await Promise.all([
+      expect(alice.getByTestId('join-empty-cta')).toBeVisible({ timeout: 10_000 }),
+      expect(bob.getByTestId('join-empty-cta')).toBeVisible({ timeout: 10_000 }),
+    ]);
+
+    // Step (f): Ask a question in-process (once; both participants see it).
     const ticket = askGroup({ question: 'Migrations strategy?' });
 
-    // Step (e): Wait for the question to appear in BOTH browsers.
+    // Step (g): Wait for the question to appear in BOTH browsers.
     await Promise.all([
       expect(alice.getByText(/Migrations strategy/)).toBeVisible({ timeout: 8_000 }),
       expect(bob.getByText(/Migrations strategy/)).toBeVisible({ timeout: 8_000 }),
     ]);
 
-    // Step (f): Both submit different suggestions concurrently.
+    // Step (h): Both submit different suggestions concurrently.
     await Promise.all([
       (async () => {
         await alice.getByPlaceholder('Your answer').fill('Use Flyway');
@@ -57,14 +77,14 @@ test('multi-participant: two participants both submit', async ({ session, browse
       })(),
     ]);
 
-    // Step (g): Bob also submits a comment.
+    // Step (i): Bob also submits a comment.
     await bob.getByPlaceholder('Add a comment').fill('Or maybe Atlas?');
     await bob.getByRole('button', { name: /comment/i }).click();
 
-    // Step (h): awaitAnswer in-process — snapshot must contain both participants.
+    // Step (j): awaitAnswer in-process — snapshot must contain both participants.
     const snap = await awaitAnswer({ ticket_id: ticket.ticket_id, timeout_s: 8 });
 
-    // Step (i): Assert both participants' suggestions appear in the snapshot.
+    // Step (k): Assert both participants' suggestions appear in the snapshot.
     const names = snap.suggestions.map((s) => s.participant_name).sort();
     expect(names).toEqual(['Alice', 'Bob']);
 
@@ -76,7 +96,7 @@ test('multi-participant: two participants both submit', async ({ session, browse
       true,
     );
 
-    // Step (j): Resolve the question.
+    // Step (l): Resolve the question.
     const out = recordAnswer({
       ticket_id: ticket.ticket_id,
       value: 'Use Flyway',
@@ -84,9 +104,10 @@ test('multi-participant: two participants both submit', async ({ session, browse
     });
     expect(out.ok).toBe(true);
   } finally {
-    // Step (k): Explicit context cleanup so Playwright doesn't warn about leaked contexts.
+    // Step (m): Explicit context cleanup so Playwright doesn't warn about leaked contexts.
     await aliceCtx.close();
     await bobCtx.close();
+    await coordinatorCtx.close();
   }
 
   // NOTE: Do NOT call stopSession() — the fixture's finally block handles teardown.

@@ -16,15 +16,17 @@ test('tunnel banner: dismiss applies to one URL only; new URL re-shows it (Pitfa
 }) => {
   test.setTimeout(30_000);
 
-  // Step 1: Normal join.
+  // Step 1: Participant joins (v2.0.0: "Continue" button, no join code).
+  // The tunnel banner is broadcast to all connected WS subscribers — a pending
+  // participant (waiting-for-approval screen) already has a live WS and will
+  // receive the event, so coordinator approval is not required for this test.
   await page.goto(session.public_url);
   await expect(page.getByLabel(/display name/i)).toBeVisible();
   await page.getByLabel(/display name/i).fill('Alice');
-  // No join code in v2.0.0 — approval-gate model.
-  await page.getByRole('button', { name: /join session/i }).click();
-  await expect(page.getByText(/waiting for a question from the ai host/i)).toBeVisible({
-    timeout: 10_000,
-  });
+  await page.getByRole('button', { name: /^continue$/i }).click();
+
+  // Participant is pending — WS is live on the waiting-for-approval screen.
+  await expect(page.getByTestId('join-waiting')).toBeVisible({ timeout: 10_000 });
 
   // Grant clipboard-write so the standards-track navigator.clipboard path
   // succeeds; without it the component falls back to document.execCommand

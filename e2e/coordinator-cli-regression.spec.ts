@@ -10,9 +10,14 @@
 //   - never sets or references the sb_c coordinator cookie.
 // The coordinator surface is simply never touched. If a future change couples
 // the CLI resolution path to the coordinator UI, this spec fails.
+//
+// Phase 4 note: participants must be approved before posting suggestions. Approval
+// is driven programmatically here (mcpState.manager.approveParticipant) rather than
+// through the coordinator browser, preserving the "no coordinator tab" constraint.
 
 import { test, expect } from './fixtures.js';
 import { askGroup, awaitAnswer, recordAnswer } from '../packages/server/src/mcp/tools.js';
+import { mcpState } from '../packages/server/src/mcp/state.js';
 
 test('CLI-only regression: full brainstorm resolves via MCP recordAnswer, no coordinator tab (COORD-04)', async ({
   session,
@@ -29,11 +34,26 @@ test('CLI-only regression: full brainstorm resolves via MCP recordAnswer, no coo
     await participant.goto(session.public_url);
     await expect(participant.getByLabel(/display name/i)).toBeVisible();
     await participant.getByLabel(/display name/i).fill('Alice');
-    // No join code in v2.0.0 — approval-gate model.
-    await participant.getByRole('button', { name: /join session/i }).click();
-    await expect(
-      participant.getByText(/waiting for a question from the ai host/i),
-    ).toBeVisible({ timeout: 10_000 });
+    // v2.0.0: button is "Continue", no join code.
+    await participant.getByRole('button', { name: /^continue$/i }).click();
+
+    // Participant is pending — waiting-for-approval screen is visible, WS is live.
+    await expect(participant.getByTestId('join-waiting')).toBeVisible({ timeout: 10_000 });
+
+    // Phase 4 approval (programmatic — no coordinator browser tab). Alice has
+    // POSTed /api/join successfully (the waiting screen confirms this) so she is
+    // in the participant roster. Approve her via the in-process SessionManager,
+    // which broadcasts `participant_status_changed{status:'approved'}` over WS.
+    // This satisfies the approval gate without ever opening coordinator_url.
+    const aliceParticipant = mcpState.manager!
+      .sessionView()
+      .participants.find((p) => p.display_name === 'Alice');
+    if (!aliceParticipant) throw new Error('Alice not found in participant roster after join');
+    mcpState.manager!.approveParticipant(aliceParticipant.id);
+
+    // Participant transitions to the session view upon receiving the approval event.
+    await expect(participant.getByTestId('join-waiting')).toBeHidden({ timeout: 10_000 });
+    await expect(participant.getByTestId('join-empty-cta')).toBeVisible({ timeout: 10_000 });
 
     // CLI path: ask the question in-process.
     const ticket = askGroup({ question: 'Which migration tool?' });

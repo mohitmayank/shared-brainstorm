@@ -12,6 +12,7 @@
 import { test, expect } from './fixtures.js';
 import { askGroup, awaitAnswer } from '../packages/server/src/mcp/tools.js';
 import { mcpState } from '../packages/server/src/mcp/state.js';
+import { joinAndApprove } from './helpers.js';
 
 // A path-like, secret-looking value that the askGroup redactor would scrub.
 // The override path is trusted initiator input, so it must survive verbatim.
@@ -29,21 +30,14 @@ test('coordinator override: typed answer resolves the question, recorded verbati
   const coordinator = await coordinatorCtx.newPage();
 
   try {
-    // Participant joins (so the session has a live participant + a question can
-    // be asked through the normal flow), then the coordinator opens their URL.
-    await participant.goto(session.public_url);
-    await expect(participant.getByLabel(/display name/i)).toBeVisible();
-    await participant.getByLabel(/display name/i).fill('Alice');
-    // No join code in v2.0.0 — approval-gate model.
-    await participant.getByRole('button', { name: /join session/i }).click();
-    await expect(
-      participant.getByText(/waiting for a question from the ai host/i),
-    ).toBeVisible({ timeout: 10_000 });
+    // Participant joins and gets approved via the coordinator (v2.0.0 approval-gate model).
+    await joinAndApprove(participant, coordinator, {
+      publicUrl: session.public_url,
+      coordinatorUrl: session.coordinator_url,
+      displayName: 'Alice',
+    });
 
-    await coordinator.goto(session.coordinator_url);
-    await expect(coordinator.getByTestId('coordinator-page')).toBeVisible({ timeout: 10_000 });
-    await expect(coordinator.getByLabel(/join code/i)).toHaveCount(0);
-
+    // The coordinator tab is still open and ready. Ask a question in-process.
     const ticket = askGroup({ question: 'Where should we store refresh tokens?' });
     const card = coordinator.getByTestId(`coordinator-question-${ticket.ticket_id}`);
     await expect(card).toBeVisible({ timeout: 10_000 });

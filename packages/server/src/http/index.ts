@@ -65,7 +65,16 @@ export async function startHttpServer(args: {
         isCoordinator = false;
       }
       let conn: { handle: (m: unknown) => void; close: () => void } | null = null;
-      let lastSeq: number | null = null;
+      // WR-04: seed replay from the `?last_seq=` query param the client appends
+      // in `buildWsUrl`. Previously this param was dead (only the subsequent
+      // `hello` frame drove replay), so a reconnecting client could silently
+      // miss buffered events between connect and the first `hello` if that frame
+      // was dropped or reordered. Honoring it here makes `onOpen` replay from the
+      // requested seq; a later `hello` with `last_seq` still re-replays (the
+      // client's reducer dedupes by seq), so the two paths are consistent.
+      const lastSeqParam = c.req.query('last_seq');
+      const parsedLastSeq = lastSeqParam !== undefined ? Number(lastSeqParam) : NaN;
+      let lastSeq: number | null = Number.isInteger(parsedLastSeq) ? parsedLastSeq : null;
       return {
         async onOpen(_evt, wsCtx) {
           const connectArgs: Parameters<typeof wsRouter.connect>[0] = {

@@ -620,4 +620,102 @@ describe('HTTP API', () => {
       expect(mgr.sessionView().participants.find((p) => p.id === data.id)!.status).toBe('approved');
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Phase 4 / JOIN-04: POST /api/coordinator/kick
+  // ---------------------------------------------------------------------------
+  describe('POST /api/coordinator/kick', () => {
+    it('returns 200 for an approved participant and sets status to kicked', async () => {
+      const { app, mgr } = setup();
+      const ccookie = await coordinatorCookie(app, mgr);
+      const { id, cookie } = await joinAs(app, mgr, 'Alice');
+      // Confirm participant is approved before kicking
+      expect(mgr.sessionView().participants.find((p) => p.id === id)!.status).toBe('approved');
+      const res = await app.request(
+        '/api/coordinator/kick',
+        json({ participant_id: id }, ccookie),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(mgr.sessionView().participants.find((p) => p.id === id)!.status).toBe('kicked');
+      // Kicked participants remain in the Map (not deleted)
+      expect(mgr.sessionView().participants).toHaveLength(1);
+      // suppress unused variable warning
+      void cookie;
+    });
+
+    it('returns 401 without coordinator cookie', async () => {
+      const { app, mgr } = setup();
+      const { id } = await joinAs(app, mgr, 'Bob');
+      const res = await app.request('/api/coordinator/kick', json({ participant_id: id }));
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'not_coordinator' });
+    });
+
+    it('returns 404 for unknown participant_id', async () => {
+      const { app, mgr } = setup();
+      const ccookie = await coordinatorCookie(app, mgr);
+      const res = await app.request(
+        '/api/coordinator/kick',
+        json({ participant_id: 'p_does_not_exist' }, ccookie),
+      );
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'not_found' });
+    });
+
+    it('kicked participant gets 403 removed on POST /api/suggestion', async () => {
+      const { app, mgr } = setup();
+      const ccookie = await coordinatorCookie(app, mgr);
+      const { id, cookie } = await joinAs(app, mgr, 'Carol');
+      // Kick via coordinator route
+      const kickRes = await app.request(
+        '/api/coordinator/kick',
+        json({ participant_id: id }, ccookie),
+      );
+      expect(kickRes.status).toBe(200);
+      // Kicked participant tries to post a suggestion
+      mgr.askGroup({ question: 'q?' });
+      const sugRes = await app.request(
+        '/api/suggestion',
+        json({ question_id: mgr.currentQuestion()!.id, value: 'my suggestion' }, cookie),
+      );
+      expect(sugRes.status).toBe(403);
+      expect(await sugRes.json()).toEqual({ error: 'removed' });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 4 / JOIN-03: POST /api/coordinator/lock
+  // ---------------------------------------------------------------------------
+  describe('POST /api/coordinator/lock', () => {
+    it('returns 200 and emits room_locked when locking', async () => {
+      const { app, mgr } = setup();
+      const ccookie = await coordinatorCookie(app, mgr);
+      const res = await app.request(
+        '/api/coordinator/lock',
+        json({ locked: true }, ccookie),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      expect(mgr.sessionView().locked).toBe(true);
+    });
+
+    it('POST /api/join while locked returns 423 session_locked', async () => {
+      const { app, mgr } = setup();
+      const ccookie = await coordinatorCookie(app, mgr);
+      // Lock the room
+      await app.request('/api/coordinator/lock', json({ locked: true }, ccookie));
+      // New participant tries to join
+      const joinRes = await app.request('/api/join', json({ display_name: 'Latecomer' }));
+      expect(joinRes.status).toBe(423);
+      expect(await joinRes.json()).toEqual({ error: 'session_locked' });
+    });
+
+    it('returns 401 without coordinator cookie', async () => {
+      const { app } = setup();
+      const res = await app.request('/api/coordinator/lock', json({ locked: true }));
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'not_coordinator' });
+    });
+  });
 });

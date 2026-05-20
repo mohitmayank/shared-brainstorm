@@ -162,6 +162,26 @@ describe('WS router', () => {
   });
 });
 
+describe('kicked participant gate', () => {
+  it('acceptOrReject returns kind:reject for kicked participant', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    mgr.approveParticipant(p.id);
+    mgr.kickParticipant(p.id);
+    const r = await router.acceptOrReject({ cookieParticipantId: p.id, isCoordinator: false });
+    expect(r.kind).toBe('reject');
+    if (r.kind === 'reject') expect(r.reason).toBe('removed');
+  });
+
+  it('a pending participant is accepted at WS upgrade (they see the waiting screen)', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Bob' });
+    // p is pending — should still be accepted at upgrade (not blocked)
+    const r = await router.acceptOrReject({ cookieParticipantId: p.id, isCoordinator: false });
+    expect(r.kind).toBe('ok');
+  });
+});
+
 describe('coordinator upgrade', () => {
   it('accepts a coordinator connect (isCoordinator=true, no participant cookie)', async () => {
     const { router } = setup();

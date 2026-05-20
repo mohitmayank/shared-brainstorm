@@ -607,6 +607,124 @@ describe('SessionManager', () => {
     });
   });
 
+  describe('kickParticipant', () => {
+    it('kickParticipant() sets status to kicked and emits participant_status_changed', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const p = mgr.addParticipant({ display_name: 'Alice' });
+        mgr.approveParticipant(p.id);
+        mgr.kickParticipant(p.id);
+        const view = mgr.sessionView();
+        expect(view.participants[0]!.status).toBe('kicked');
+        const changed = events.filter(
+          (e) => e.type === 'participant_status_changed' && e.payload.status === 'kicked',
+        );
+        expect(changed).toHaveLength(1);
+        if (changed[0] && changed[0].type === 'participant_status_changed') {
+          const ev = changed[0] as { type: string; payload: { participant_id: string; status: string } };
+          expect(ev.payload.participant_id).toBe(p.id);
+          expect(ev.payload.status).toBe('kicked');
+        }
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('kickParticipant() is idempotent when already kicked', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const p = mgr.addParticipant({ display_name: 'Alice' });
+        mgr.approveParticipant(p.id);
+        mgr.kickParticipant(p.id);
+        mgr.kickParticipant(p.id); // second call is no-op
+        const kicked = events.filter(
+          (e) => e.type === 'participant_status_changed' && e.payload.status === 'kicked',
+        );
+        expect(kicked).toHaveLength(1);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('kickParticipant() throws on unknown id', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const fakeId = 'p_nonexistent' as ParticipantId;
+        expect(() => mgr.kickParticipant(fakeId)).toThrow(/unknown id/);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('kickParticipant() does NOT delete participant from Map', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const p = mgr.addParticipant({ display_name: 'Alice' });
+        mgr.approveParticipant(p.id);
+        mgr.kickParticipant(p.id);
+        // Participant must remain in sessionView with status 'kicked' (not deleted)
+        const view = mgr.sessionView();
+        expect(view.participants).toHaveLength(1);
+        expect(view.participants[0]!.id).toBe(p.id);
+        expect(view.participants[0]!.status).toBe('kicked');
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  describe('setLocked', () => {
+    it('setLocked(true) emits room_locked with locked:true', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.setLocked(true);
+        const locked = events.filter((e) => e.type === 'room_locked');
+        expect(locked).toHaveLength(1);
+        if (locked[0] && locked[0].type === 'room_locked') {
+          const ev = locked[0] as { type: string; payload: { locked: boolean } };
+          expect(ev.payload.locked).toBe(true);
+        }
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('setLocked() is idempotent — calling setLocked(true) twice emits only one event', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.setLocked(true);
+        mgr.setLocked(true); // second call is no-op
+        const locked = events.filter((e) => e.type === 'room_locked');
+        expect(locked).toHaveLength(1);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('setLocked(false) unlocks and emits room_locked with locked:false', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.setLocked(true);
+        mgr.setLocked(false);
+        const locked = events.filter((e) => e.type === 'room_locked');
+        expect(locked).toHaveLength(2);
+        if (locked[1] && locked[1].type === 'room_locked') {
+          const ev = locked[1] as { type: string; payload: { locked: boolean } };
+          expect(ev.payload.locked).toBe(false);
+        }
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
   describe('SessionManager — coordinator token', () => {
     it('coordinatorToken() returns a 22-char token in the ALPHABET set', () => {
       const { mgr, cleanup } = makeMgr();

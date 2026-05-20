@@ -4,8 +4,9 @@
 // PRES-03: "AI is thinking…" empty-state when waiting; "Coordinator is picking"
 //          caption for participants when status is 'choosing'.
 //
-// PRES-02 activity assertions (typing indicator) are stubbed as test.todo() —
-// the 'typing' ClientCommand and server-side handler are wired in Plan 03.
+// PRES-02 activity assertions (typing indicator + "submitted a suggestion") are
+// real end-to-end assertions, wired in Plan 03 (the 'typing' ClientCommand and
+// server-side handler), exercised across two participant browser contexts below.
 
 import { test, expect } from './fixtures.js';
 import { askGroup, stopSession } from '../packages/server/src/mcp/tools.js';

@@ -95,6 +95,22 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
   const seq = evt.seq;
   const type = evt.type;
 
+  // WR-07: global monotonic seq guard. Replay can deliver the same buffered
+  // event more than once — a reconnecting client is seeded from the
+  // `?last_seq=` query param at WS open AND replays again from the `hello`
+  // frame. Per-entity dedup (id checks) covers idempotent events, but
+  // append-style events like `question_resolved` push a duplicate decision on
+  // the second delivery. Dropping any event whose seq is not strictly newer
+  // than the last applied seq makes replay idempotent regardless of how many
+  // paths deliver it.
+  //
+  // `welcome` is exempt: it is the authoritative full-state resync sent on
+  // every (re)connect and may carry a seq <= the client's current watermark
+  // (a reconnecting client already past the snapshot seq). It must always
+  // re-prime state — and it overwrites `lastSeq` to the snapshot's seq so the
+  // replayed delta that follows is judged against the correct watermark.
+  if (type !== 'welcome' && seq <= state.lastSeq) return state;
+
   if (type === 'welcome') {
     const p = payload<WelcomePayload>(evt);
     return {

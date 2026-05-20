@@ -138,6 +138,78 @@ describe('reduce — participant events', () => {
   });
 });
 
+describe('reduce — seq guard (WR-07: idempotent replay)', () => {
+  const baseState = reduce(initialState, welcomeEphemeral);
+
+  const broadcastEvt: AnyFrame = {
+    seq: 3,
+    ts: '2026-01-01T00:00:03Z',
+    type: 'question_broadcast',
+    payload: {
+      question: {
+        id: 'sb_q_001',
+        ticket_id: 'sb_t_001',
+        asked_at: '2026-01-01T00:00:03Z',
+        text: 'Which approach?',
+        status: 'broadcast',
+        suggestions: [],
+        comments: [],
+        resolution: null,
+      },
+    },
+  };
+
+  const resolvedEvt: AnyFrame = {
+    seq: 4,
+    ts: '2026-01-01T00:00:04Z',
+    type: 'question_resolved',
+    payload: {
+      question_id: 'sb_q_001',
+      resolution: {
+        value: 'Use approach A',
+        source: 'override',
+        recorded_at: '2026-01-01T00:00:04Z',
+      },
+    },
+  };
+
+  it('records exactly one decision when question_resolved is delivered once', () => {
+    const withQ = reduce(baseState, broadcastEvt);
+    const resolved = reduce(withQ, resolvedEvt);
+    expect(resolved.session?.decisions).toHaveLength(1);
+    expect(resolved.session?.decisions[0]?.answer).toBe('Use approach A');
+    expect(resolved.lastSeq).toBe(4);
+  });
+
+  it('does NOT double-append a decision when question_resolved replays (double-delivery)', () => {
+    // Simulates the WR-07 regression: a reconnecting client is seeded from the
+    // `?last_seq=` query param at WS open AND replays again from the `hello`
+    // frame, so the same buffered `question_resolved` (seq 4) arrives twice.
+    const withQ = reduce(baseState, broadcastEvt);
+    const once = reduce(withQ, resolvedEvt);
+    const twice = reduce(once, resolvedEvt);
+    expect(twice.session?.decisions).toHaveLength(1);
+    expect(twice).toBe(once); // guard returns the same state reference unchanged
+  });
+
+  it('ignores an out-of-order event whose seq is older than the watermark', () => {
+    const withQ = reduce(baseState, broadcastEvt); // lastSeq = 3
+    const resolved = reduce(withQ, resolvedEvt); // lastSeq = 4
+    // A stale re-delivery of the seq-3 broadcast must not clobber the resolved
+    // question or rewind the watermark.
+    const stale = reduce(resolved, broadcastEvt);
+    expect(stale).toBe(resolved);
+    expect(stale.lastSeq).toBe(4);
+    expect(stale.session?.current_question?.status).toBe('resolved');
+  });
+
+  it('drops an event whose seq equals the current watermark', () => {
+    const withQ = reduce(baseState, broadcastEvt); // lastSeq = 3
+    const dup = reduce(withQ, broadcastEvt); // seq 3 <= lastSeq 3 → dropped
+    expect(dup).toBe(withQ);
+  });
+});
+
 describe('reduce — session_ended', () => {
   const baseState = reduce(initialState, welcomeEphemeral);
 

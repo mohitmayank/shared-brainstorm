@@ -71,10 +71,14 @@ export function Coordinator({ session }: CoordinatorProps) {
       patchCard(ticketId, { recording: true, error: null });
       try {
         await postCoordinatorAnswer({ ticket_id: ticketId, value, source });
-        // On success keep `recording` until the `question_resolved` event flips
-        // the card; clear it here so the buttons re-enable if the event is
-        // delayed. The card switches to the resolved variant via the reducer.
-        patchCard(ticketId, { recording: false });
+        // WR-03: leave `recording: true` on success. The server has already
+        // resolved the question, so the buttons must stay disabled until the
+        // `question_resolved` WS event flips the card to its resolved variant
+        // via the reducer (controls are gated on `isResolved || recording`).
+        // Clearing `recording` synchronously here reopened a window where a
+        // fast second pick fired a redundant POST that the server rejects with
+        // 409 — surfacing a confusing "already resolved" error on the happy
+        // path. Only the error branch below re-enables the controls.
       } catch (e: unknown) {
         const status = (e as { status?: number }).status;
         const msg =

@@ -933,12 +933,16 @@ describe('reduce — presence EphemeralFrame branch (PRES-02)', () => {
 
   // Test 7: WR-01 regression — typing-start → submitted → typing-stop must preserve 'submitted'
   it('WR-01: typing-start → suggestion_added (submitted) → typing-stop (idle) leaves activity "submitted" (not deleted)', () => {
+    // Need a base state with a session so suggestion_added can update presence
+    // (the reducer's suggestion_added branch guards on state.session !== null).
+    const baseState = reduce(initialState, welcomeEphemeral);
+
     // Step 1: participant starts typing — presence entry set to 'typing'
     const typingStartFrame: EphemeralFrame = {
       type: 'presence',
       payload: { actor_kind: 'participant', actor_id: 'sb_p_001', activity: 'typing' },
     };
-    const afterTypingStart = reduce(initialState, typingStartFrame);
+    const afterTypingStart = reduce(baseState, typingStartFrame);
     expect(afterTypingStart.presence['sb_p_001']?.activity).toBe('typing');
 
     // Step 2: suggestion_added arrives — presence promoted to 'submitted' (6s TTL)

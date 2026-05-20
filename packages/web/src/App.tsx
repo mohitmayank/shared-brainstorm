@@ -14,6 +14,7 @@ import { join, postCoordinatorJoin } from './lib/api.js';
 import { connectWs } from './lib/ws.js';
 import type { WsHandle, CloseInfo } from './lib/ws.js';
 import { nextBackoffMs, type BackoffOpts } from './lib/backoff.js';
+import { planPresenceTimer, type PresenceTimerPlan } from './lib/presenceTimers.js';
 import type { AnyFrame } from '@shared-brainstorm/shared';
 import { Join } from './pages/Join.js';
 import { Session } from './pages/Session.js';
@@ -121,6 +122,35 @@ export function App() {
   // startWs is useCallback([])) to avoid cancelling the 6s 'submitted' timer when a
   // trailing typing-stop idle frame arrives AFTER suggestion_added (frame Ordering B).
   const presenceActivity = useRef<Map<string, 'typing' | 'picking' | 'submitted'>>(new Map());
+
+  // Apply a pure PresenceTimerPlan (from planPresenceTimer) to the timer + activity
+  // refs. All deps are stable (refs + dispatch), so this is safe to reference inside
+  // the startWs useCallback([]) closure. The decision logic itself lives in the pure,
+  // unit-tested lib/presenceTimers module (WR-01 regression guard).
+  const applyPresenceTimerPlan = useCallback((plan: PresenceTimerPlan): void => {
+    if (plan.clearTimerKey !== null) {
+      const existing = presenceTimers.current.get(plan.clearTimerKey);
+      if (existing !== undefined) {
+        clearTimeout(existing);
+        presenceTimers.current.delete(plan.clearTimerKey);
+      }
+    }
+    if (plan.deleteActivity !== null) presenceActivity.current.delete(plan.deleteActivity);
+    if (plan.setActivity !== null) {
+      presenceActivity.current.set(plan.setActivity.key, plan.setActivity.activity);
+    }
+    if (plan.setTimer !== null) {
+      const { key, ttlMs } = plan.setTimer;
+      presenceTimers.current.set(
+        key,
+        setTimeout(() => {
+          presenceTimers.current.delete(key);
+          presenceActivity.current.delete(key);
+          dispatch({ type: 'presence_expired', key } satisfies PresenceExpireAction);
+        }, ttlMs),
+      );
+    }
+  }, []);
   const [joinError, setJoinError] = useState<string | null>(null);
   // True when the server returned 423 (coordinator locked the room).
   const [joinLocked, setJoinLocked] = useState(false);
@@ -256,57 +286,24 @@ export function App() {
             import('@shared-brainstorm/shared').EphemeralFrame,
             { type: 'presence' }
           >;
-          const activity = presenceFrame.payload.activity;
-          if (activity !== 'idle') {
-            const key = presenceFrame.payload.actor_id ?? '__coordinator';
-            // Record activity synchronously so a later idle frame can tell whether
-            // this key is a sticky 'submitted' entry (only 'typing'/'picking' here).
-            presenceActivity.current.set(key, activity);
-            const existing = presenceTimers.current.get(key);
-            if (existing !== undefined) clearTimeout(existing);
-            presenceTimers.current.set(
-              key,
-              setTimeout(() => {
-                presenceTimers.current.delete(key);
-                presenceActivity.current.delete(key);
-                dispatch({ type: 'presence_expired', key } satisfies PresenceExpireAction);
-              }, 4000),
-            );
-          } else {
-            // idle frame: cancel the residual typing/picking timer — BUT NOT the 6s
-            // 'submitted' timer. The reducer keeps 'submitted' entries (state.ts idle
-            // branch), so cancelling their timer here would strand the line forever
-            // (frame Ordering B: suggestion_added before the trailing typing-stop).
-            // presenceActivity is the synchronous source of truth (stale `state` cannot
-            // be read inside this useCallback([]) closure).
-            const key = presenceFrame.payload.actor_id ?? '__coordinator';
-            if (presenceActivity.current.get(key) !== 'submitted') {
-              const existing = presenceTimers.current.get(key);
-              if (existing !== undefined) {
-                clearTimeout(existing);
-                presenceTimers.current.delete(key);
-              }
-              presenceActivity.current.delete(key);
-            }
-          }
+          const key = presenceFrame.payload.actor_id ?? '__coordinator';
+          applyPresenceTimerPlan(
+            planPresenceTimer(
+              { kind: 'presence', key, activity: presenceFrame.payload.activity },
+              presenceActivity.current.get(key),
+            ),
+          );
         }
-        // Phase 5 (PRES-02): schedule 6s TTL for "submitted" presence derived from durable events.
+        // Phase 5 (PRES-02): schedule TTL for "submitted" presence derived from durable events.
         if (frame.type === 'suggestion_added' || frame.type === 'suggestion_updated') {
           const participantId = (
             frame as unknown as { payload: { suggestion: { participant_id: string } } }
           ).payload.suggestion.participant_id;
-          // Mark 'submitted' synchronously so a trailing typing-stop idle frame for the
-          // same participant does NOT cancel this 6s timer (WR-01 frame Ordering B).
-          presenceActivity.current.set(participantId, 'submitted');
-          const existing = presenceTimers.current.get(participantId);
-          if (existing !== undefined) clearTimeout(existing);
-          presenceTimers.current.set(
-            participantId,
-            setTimeout(() => {
-              presenceTimers.current.delete(participantId);
-              presenceActivity.current.delete(participantId);
-              dispatch({ type: 'presence_expired', key: participantId } satisfies PresenceExpireAction);
-            }, 6000),
+          applyPresenceTimerPlan(
+            planPresenceTimer(
+              { kind: 'submitted', key: participantId },
+              presenceActivity.current.get(participantId),
+            ),
           );
         }
       },

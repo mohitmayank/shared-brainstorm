@@ -376,7 +376,10 @@ describe('typing command — approved-participant gate', () => {
 describe('picking command — coordinator-only gate', () => {
   it('Test 5: picking start from coordinator → setSessionStatus("choosing") + broadcastEphemeral with activity "picking"', async () => {
     const { router, mgr } = setup();
-    mgr.askGroup({ question: 'q?' });
+    // WR-04 fix: capture the real ticket_id from askGroup so the coordinator
+    // picking command can supply the matching ticket_id (the server now validates
+    // that the command ticket_id equals the current question's ticket_id).
+    const { ticket_id } = mgr.askGroup({ question: 'q?' });
     // Ensure question is broadcast so the race guard passes
     expect(mgr.currentQuestion()?.status).toBe('broadcast');
 
@@ -395,7 +398,7 @@ describe('picking command — coordinator-only gate', () => {
     });
     if (conn.kind !== 'ok') throw new Error('expected ok');
 
-    conn.handle({ type: 'picking', ticket_id: 'some-ticket', state: 'start' });
+    conn.handle({ type: 'picking', ticket_id, state: 'start' });
 
     expect(mgr.sessionView().session_status).toBe('choosing');
 
@@ -455,6 +458,33 @@ describe('picking command — coordinator-only gate', () => {
 
     // status stays at 'waiting' (no question was broadcast)
     expect(mgr.sessionView().session_status).toBe('waiting');
+    expect(ephemeralFrames.filter((f) => f.type === 'presence')).toHaveLength(0);
+  });
+
+  it('Test 7b (WR-04): picking start with stale/wrong ticket_id — silently ignored (status unchanged)', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'q?' });
+    // Ensure the question is broadcast
+    expect(mgr.currentQuestion()?.status).toBe('broadcast');
+
+    const ephemeralFrames: EphemeralFrame[] = [];
+    vi.spyOn(router, 'broadcast').mockImplementation((evt) => {
+      if (!('seq' in evt)) ephemeralFrames.push(evt);
+    });
+
+    const conn = await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+
+    // Send picking start with a stale/wrong ticket_id — must NOT transition to choosing
+    conn.handle({ type: 'picking', ticket_id: 'stale-wrong-ticket', state: 'start' });
+
+    // Status must remain at question_open (not changed to choosing)
+    expect(mgr.sessionView().session_status).toBe('question_open');
     expect(ephemeralFrames.filter((f) => f.type === 'presence')).toHaveLength(0);
   });
 

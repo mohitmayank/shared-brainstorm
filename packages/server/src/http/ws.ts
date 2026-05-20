@@ -233,7 +233,16 @@ export function createWsRouter({
             if (c.state === 'start') {
               // T-05-10: race condition guard — only transition to 'choosing' when a
               // broadcast question exists.
-              if (manager.currentQuestion()?.status !== 'broadcast') return;
+              // WR-04 fix: also validate that ticket_id matches the *current* question's
+              // ticket_id so this command is scoped to that question rather than coupling
+              // a per-ticket UI action to global session state. Stale ticket_ids from a
+              // prior question (e.g. resolved before picking stop arrived) are ignored.
+              // Note: Phase 6 batch questions will generalise this into a per-ticket map;
+              // for now one active question per session is the invariant, so equality-check
+              // is sufficient.
+              const q = manager.currentQuestion();
+              if (q?.status !== 'broadcast') return;
+              if (q.ticket_id !== c.ticket_id) return; // stale ticket — ignore
               manager.setSessionStatus('choosing');
               manager.broadcastEphemeral({
                 type: 'presence',

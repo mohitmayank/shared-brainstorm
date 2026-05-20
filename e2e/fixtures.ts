@@ -13,6 +13,13 @@ interface SessionFixture {
     join_code: string;
     invite_text: string;
     transcriptDir: string;
+    // 03-06: the coordinator surface (parallel to public_url). `coordinator_url`
+    // comes straight off the startSession output (added in 03-01) and carries
+    // `?role=coordinator&token=<22>`; `coordinator_token` is parsed back out of
+    // that URL so each coordinator spec can assert the URL actually carries the
+    // token without re-reading mcpState. The token is NEVER logged to stdout.
+    coordinator_url: string;
+    coordinator_token: string;
   };
 }
 
@@ -47,8 +54,19 @@ export const test = base.extend<SessionFixture>({
         `LAN fixture regression: LanTransport.bind=${lanProbe.bind}, expected '0.0.0.0' (REL-08 D-13)`,
       );
     }
+    // 03-06: derive coordinator_token by parsing the `token` query param out of
+    // coordinator_url — this asserts the URL itself carries the token (rather
+    // than reading mcpState.manager!.coordinatorToken() directly, which would
+    // not prove the URL shape). The token must stay off stdout.
+    const coordinator_url = session.coordinator_url;
+    const coordinator_token = new URL(coordinator_url).searchParams.get('token');
+    if (!coordinator_token) {
+      throw new Error(
+        'coordinator fixture regression: coordinator_url is missing the ?token= query param',
+      );
+    }
     try {
-      await use({ ...session, transcriptDir });
+      await use({ ...session, transcriptDir, coordinator_url, coordinator_token });
     } finally {
       // The mcpState singleton MUST be reset between specs.
       if (mcpState.manager) {

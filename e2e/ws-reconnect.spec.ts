@@ -11,7 +11,7 @@ test('ws reconnect: replay restores state via hello/welcome', async ({ session, 
   // Wait for the Join form (no active cookie yet on first load).
   await expect(page.getByLabel(/display name/i)).toBeVisible();
   await page.getByLabel(/display name/i).fill('Alice');
-  await page.getByLabel(/join code/i).fill(session.join_code);
+  // No join code in v2.0.0 — approval-gate model.
   await page.getByRole('button', { name: /join session/i }).click();
 
   // Step (b): Wait for the in-session view. The `welcome` frame sets sessionStorage.lastSeq.
@@ -36,7 +36,7 @@ test('ws reconnect: replay restores state via hello/welcome', async ({ session, 
   recordAnswer({ ticket_id: ticket1.ticket_id, value: 'resolved-Q1', source: 'synthesis' });
 
   // Step (d): Trigger reconnect via page.reload(). The reload clears sessionStorage
-  // (including sb.last_seq and sb.join_code), resets the in-memory WS connection,
+  // (including sb.last_seq), resets the in-memory WS connection,
   // and shows the "Connecting…" state briefly before auto-resuming via the existing cookie.
   //
   // We fire askGroup for Q2 immediately after initiating the reload but while the

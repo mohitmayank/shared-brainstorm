@@ -18,14 +18,12 @@ test('multi-participant: two participants both submit', async ({ session, browse
       expect(bob.getByLabel(/display name/i)).toBeVisible(),
     ]);
 
-    // Alice fills and submits the join form.
+    // Alice fills and submits the join form (no join code in v2.0.0).
     await alice.getByLabel(/display name/i).fill('Alice');
-    await alice.getByLabel(/join code/i).fill(session.join_code);
     await alice.getByRole('button', { name: /join session/i }).click();
 
     // Bob fills and submits the join form.
     await bob.getByLabel(/display name/i).fill('Bob');
-    await bob.getByLabel(/join code/i).fill(session.join_code);
     await bob.getByRole('button', { name: /join session/i }).click();
 
     // Step (c): Wait for both to be in-session.

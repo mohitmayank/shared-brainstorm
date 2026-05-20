@@ -34,7 +34,7 @@ test('coordinator override: typed answer resolves the question, recorded verbati
     await participant.goto(session.public_url);
     await expect(participant.getByLabel(/display name/i)).toBeVisible();
     await participant.getByLabel(/display name/i).fill('Alice');
-    await participant.getByLabel(/join code/i).fill(session.join_code);
+    // No join code in v2.0.0 — approval-gate model.
     await participant.getByRole('button', { name: /join session/i }).click();
     await expect(
       participant.getByText(/waiting for a question from the ai host/i),

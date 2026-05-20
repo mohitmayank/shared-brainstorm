@@ -17,24 +17,39 @@ describe('MCP schemas', () => {
     expect(StartSessionInput.safeParse({ brief: 'auth' }).success).toBe(true);
   });
 
-  it('start_session output includes url, join_code, invite_text, clipboard_copied, coordinator_url', () => {
+  it('start_session output includes url, invite_text, clipboard_copied, coordinator_url (no join_code in v2.0.0)', () => {
     const ok = StartSessionOutput.safeParse({
       session_id: 'sb_s_abc',
       public_url: 'https://x.trycloudflare.com',
-      join_code: '123456',
-      invite_text: 'Hi! Join: …\nJoin code: 123456',
+      invite_text: 'Hi! Join: https://x.trycloudflare.com\n(Approval required)',
       clipboard_copied: true,
       coordinator_url: 'https://x.trycloudflare.com/?role=coordinator&token=abc',
     });
     expect(ok.success).toBe(true);
   });
 
+  it('start_session output rejects join_code (removed in v2.0.0)', () => {
+    // join_code is stripped by Zod (unknown keys are stripped by default);
+    // safeParse still succeeds — assert the stripped output has no join_code.
+    const parsed = StartSessionOutput.safeParse({
+      session_id: 'sb_s_abc',
+      public_url: 'https://x.trycloudflare.com',
+      join_code: '123456',
+      invite_text: 'Hi!',
+      clipboard_copied: true,
+      coordinator_url: 'https://x.trycloudflare.com/?role=coordinator&token=abc',
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) {
+      expect('join_code' in parsed.data).toBe(false);
+    }
+  });
+
   it('start_session output requires coordinator_url (Phase 3 COORD-01)', () => {
     const missing = StartSessionOutput.safeParse({
       session_id: 'sb_s_abc',
       public_url: 'https://x.trycloudflare.com',
-      join_code: '123456',
-      invite_text: 'Hi! Join: …\nJoin code: 123456',
+      invite_text: 'Hi!',
       clipboard_copied: true,
     });
     expect(missing.success).toBe(false);

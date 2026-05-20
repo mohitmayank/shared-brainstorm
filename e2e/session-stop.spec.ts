@@ -14,7 +14,7 @@ test('session-stop: stopSession writes transcript with ended_reason=stop_session
   // Wait for the join form to appear.
   await page.waitForSelector('#name');
   await page.fill('#name', 'Alice');
-  await page.fill('#code', session.join_code);
+  // No join code in v2.0.0 — approval-gate model.
   await page.click('button[type="submit"]');
 
   // Wait for the in-session DOM (welcome received — heading changes from "shared-brainstorm" to

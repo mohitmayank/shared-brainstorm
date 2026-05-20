@@ -34,10 +34,12 @@ function json(body: Record<string, unknown>, cookie?: string) {
 }
 
 async function joinAs(app: ReturnType<typeof buildApp>, mgr: SessionManager, name: string) {
-  const body: Record<string, string> = { display_name: name, join_code: mgr.joinCode() };
+  const body: Record<string, string> = { display_name: name };
   const res = await app.request('/api/join', json(body));
   const cookie = res.headers.get('set-cookie')!.split(';')[0]!;
-  const data = (await res.json()) as { id: string; display_name: string };
+  const data = (await res.json()) as { id: string; display_name: string; status: string };
+  // v2.0.0: participants join as pending; approve them so subsequent REST calls succeed.
+  mgr.approveParticipant(data.id as Parameters<SessionManager['approveParticipant']>[0]);
   return { cookie, ...data };
 }
 
@@ -61,32 +63,38 @@ describe('HTTP API', () => {
     expect(res.status).toBe(401);
   });
 
-  it('POST /api/join requires correct join_code', async () => {
+  it('POST /api/join returns 400 on missing display_name', async () => {
     const { app } = setup();
-    const bad = await app.request('/api/join', json({ display_name: 'A', join_code: '000000' }));
-    expect(bad.status).toBe(403);
+    const bad = await app.request('/api/join', json({}));
+    expect(bad.status).toBe(400);
   });
 
-  it('POST /api/join with correct code returns participant (no role field)', async () => {
-    const { app, mgr } = setup();
-    const res = await app.request(
-      '/api/join',
-      json({ display_name: 'Alice', join_code: mgr.joinCode() }),
-    );
+  it('POST /api/join returns participant with status=pending (no join_code required in v2.0.0)', async () => {
+    const { app } = setup();
+    const res = await app.request('/api/join', json({ display_name: 'Alice' }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body['display_name']).toBe('Alice');
+    expect(body['status']).toBe('pending');
     expect('role' in body).toBe(false);
     expect(res.headers.get('set-cookie')).toMatch(/sb_p=/);
   });
 
-  it('POST /api/join ignores coordinator_token (legacy field)', async () => {
+  it('POST /api/join returns 423 session_locked when room is locked', async () => {
     const { app, mgr } = setup();
+    mgr.setLocked(true);
+    const res = await app.request('/api/join', json({ display_name: 'Latecomer' }));
+    expect(res.status).toBe(423);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body['error']).toBe('session_locked');
+  });
+
+  it('POST /api/join ignores coordinator_token (legacy field)', async () => {
+    const { app } = setup();
     const res = await app.request(
       '/api/join',
       json({
         display_name: 'C',
-        join_code: mgr.joinCode(),
         coordinator_token: 'sbc_anything',
       }),
     );
@@ -146,10 +154,10 @@ describe('HTTP API', () => {
   // ---------------------------------------------------------------------------
   describe('Secure cookie flag (REL-09)', () => {
     it('POST /api/join sets Secure on the cookie when buildApp({secureCookie:true})', async () => {
-      const { app, mgr } = setup({ secureCookie: true });
+      const { app } = setup({ secureCookie: true });
       const res = await app.request(
         '/api/join',
-        json({ display_name: 'Alice', join_code: mgr.joinCode() }),
+        json({ display_name: 'Alice' }),
       );
       expect(res.status).toBe(200);
       const cookie = res.headers.get('set-cookie');
@@ -162,10 +170,10 @@ describe('HTTP API', () => {
     });
 
     it('POST /api/join does NOT set Secure when buildApp({secureCookie:false})', async () => {
-      const { app, mgr } = setup({ secureCookie: false });
+      const { app } = setup({ secureCookie: false });
       const res = await app.request(
         '/api/join',
-        json({ display_name: 'Bob', join_code: mgr.joinCode() }),
+        json({ display_name: 'Bob' }),
       );
       expect(res.status).toBe(200);
       const cookie = res.headers.get('set-cookie');
@@ -174,10 +182,10 @@ describe('HTTP API', () => {
     });
 
     it('POST /api/join does NOT set Secure when buildApp() omits secureCookie (LAN default)', async () => {
-      const { app, mgr } = setup();
+      const { app } = setup();
       const res = await app.request(
         '/api/join',
-        json({ display_name: 'Carol', join_code: mgr.joinCode() }),
+        json({ display_name: 'Carol' }),
       );
       expect(res.status).toBe(200);
       const cookie = res.headers.get('set-cookie');
@@ -191,8 +199,8 @@ describe('HTTP API', () => {
   // ---------------------------------------------------------------------------
   describe('cap → 409 mapping (REL-07 / D-06)', () => {
     it('POST /api/join returns 409 cap_exceeded when maxParticipants reached', async () => {
-      const { app, mgr } = setup({ maxParticipants: 2 });
-      const body = (name: string) => ({ display_name: name, join_code: mgr.joinCode() });
+      const { app } = setup({ maxParticipants: 2 });
+      const body = (name: string) => ({ display_name: name });
       const r1 = await app.request('/api/join', json(body('A')));
       const r2 = await app.request('/api/join', json(body('B')));
       const r3 = await app.request('/api/join', json(body('C')));
@@ -226,8 +234,8 @@ describe('HTTP API', () => {
     });
 
     it('cap 409 and rate-limit 429 are distinct codes (sanity)', async () => {
-      const { app, mgr } = setup({ maxParticipants: 1 });
-      const body = (name: string) => ({ display_name: name, join_code: mgr.joinCode() });
+      const { app } = setup({ maxParticipants: 1 });
+      const body = (name: string) => ({ display_name: name });
       const r1 = await app.request('/api/join', json(body('A')));
       const r2 = await app.request('/api/join', json(body('B')));
       expect(r1.status).toBe(200);
@@ -261,8 +269,8 @@ describe('HTTP API', () => {
 
     it('POST /api/join 6× in rapid succession — 6th request is 429 with retry_after_ms', async () => {
       // Build the app AFTER setting the env var so the middleware reads it.
-      const { app, mgr } = setup();
-      const mkBody = (name: string) => ({ display_name: name, join_code: mgr.joinCode() });
+      const { app } = setup();
+      const mkBody = (name: string) => ({ display_name: name });
       const statuses: number[] = [];
       let lastBody: unknown = null;
       let lastHeaders: Headers | null = null;
@@ -377,7 +385,7 @@ describe('HTTP API', () => {
       // sb_p via participant join — same buildApp instance, same thunk
       const joinRes = await app.request(
         '/api/join',
-        json({ display_name: 'Alice', join_code: mgr.joinCode() }),
+        json({ display_name: 'Alice' }),
       );
       expect(joinRes.status).toBe(200);
       expect(joinRes.headers.get('set-cookie')).toMatch(/sb_p=.*; Secure(?:;|$)/);

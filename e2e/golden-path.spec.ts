@@ -10,9 +10,8 @@ test('golden path: 1 participant joins, suggests, AI records', async ({ session,
   // Step 3: Wait for the Join form.
   await expect(page.getByLabel(/display name/i)).toBeVisible();
 
-  // Fill display name and join code then submit.
+  // Fill display name and submit (no join code in v2.0.0 — approval-gate model).
   await page.getByLabel(/display name/i).fill('Alice');
-  await page.getByLabel(/join code/i).fill(session.join_code);
   await page.getByRole('button', { name: /join session/i }).click();
 
   // Step 4: Wait for the in-session view to render (the "waiting" state message).

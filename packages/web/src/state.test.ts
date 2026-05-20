@@ -12,12 +12,13 @@ const welcomeEphemeral: AnyFrame = {
       session_id: 'sb_s_001',
       brief: 'test session',
       participants: [
-        { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z' },
+        { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
       ],
       decisions: [],
       current_question: null,
+      locked: false,
     },
-    you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z' },
+    you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
     is_coordinator: false,
   },
 };
@@ -40,6 +41,7 @@ describe('reduce — isCoordinator', () => {
     participants: [],
     decisions: [],
     current_question: null,
+    locked: false,
   };
 
   const coordinatorWelcome: AnyFrame = {
@@ -55,7 +57,7 @@ describe('reduce — isCoordinator', () => {
     type: 'welcome',
     payload: {
       session: sessionShape,
-      you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z' },
+      you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
       is_coordinator: false,
     },
   };
@@ -88,7 +90,7 @@ describe('reduce — isCoordinator', () => {
   it('ephemeral coordinator welcome also sets isCoordinator true / me null', () => {
     const ephemeral: AnyFrame = {
       type: 'welcome',
-      payload: { session: sessionShape, is_coordinator: true },
+      payload: { session: { ...sessionShape, locked: false }, is_coordinator: true },
     };
     const next = reduce(initialState, ephemeral);
     expect(next.isCoordinator).toBe(true);
@@ -108,6 +110,7 @@ describe('reduce — participant events', () => {
         id: 'sb_p_002',
         display_name: 'Bob',
         joined_at: '2026-01-01T00:00:01Z',
+        status: 'pending' as const,
       },
     },
   };

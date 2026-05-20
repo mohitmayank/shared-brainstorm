@@ -85,6 +85,7 @@ describe('connectWs', () => {
           id: 'sb_p_abc',
           display_name: 'Alice',
           joined_at: new Date().toISOString(),
+          status: 'pending',
         },
       },
     };

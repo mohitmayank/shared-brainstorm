@@ -7,8 +7,9 @@ const sessionShape = {
   participants: [],
   decisions: [],
   current_question: null,
+  locked: false,
 };
-const youShape = { id: 'sb_p_x', display_name: 'Alice', joined_at: 'x' };
+const youShape = { id: 'sb_p_x', display_name: 'Alice', joined_at: 'x', status: 'pending' as const };
 
 describe('WS events', () => {
   it('parses welcome event', () => {

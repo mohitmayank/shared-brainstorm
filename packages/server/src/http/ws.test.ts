@@ -90,6 +90,8 @@ describe('WS router', () => {
     const { router, mgr } = setup();
     mgr.askGroup({ question: 'q?' });
     const p = mgr.addParticipant({ display_name: 'Alice' });
+    // v2.0.0: participants join as pending; approve so WS suggestion guard passes.
+    mgr.approveParticipant(p.id);
     const conn = await router.connect({
       cookieParticipantId: p.id,
       isCoordinator: false,
@@ -109,6 +111,8 @@ describe('WS router', () => {
     const { router, mgr } = setup();
     mgr.askGroup({ question: 'q?' });
     const p = mgr.addParticipant({ display_name: 'Alice' });
+    // v2.0.0: participants join as pending; approve so WS comment guard passes.
+    mgr.approveParticipant(p.id);
     const conn = await router.connect({
       cookieParticipantId: p.id,
       isCoordinator: false,

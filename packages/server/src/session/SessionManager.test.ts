@@ -50,12 +50,12 @@ const makeMgrWithCaps = (caps: {
 };
 
 describe('SessionManager', () => {
-  it('start() creates a session with id and join_code', () => {
+  it('start() creates a session with id (no join_code in v2.0.0)', () => {
     const { mgr, cleanup } = makeMgr();
     try {
       const out = mgr.start({ brief: 'auth flow' });
       expect(out.session_id).toMatch(/^sb_s_/);
-      expect(out.join_code).toMatch(/^\d{6}$/);
+      expect((out as unknown as Record<string, unknown>)['join_code']).toBeUndefined();
     } finally {
       cleanup();
     }

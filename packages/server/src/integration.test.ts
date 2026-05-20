@@ -24,7 +24,7 @@ describe('Full integration: start → join → ask → suggest → record → st
     );
     expect(session.session_id).toMatch(/^sb_s_/);
     expect(session.public_url).toMatch(/^http:\/\//);
-    expect(session.join_code).toMatch(/^\d{6}$/);
+    expect((session as unknown as Record<string, unknown>)['join_code']).toBeUndefined();
     expect(session.coordinator_url).toMatch(/\?role=coordinator&token=[A-Za-z0-9_-]{22}$/);
     expect(session.invite_text).not.toContain(session.coordinator_url);
 
@@ -32,22 +32,28 @@ describe('Full integration: start → join → ask → suggest → record → st
     const app = mcpState.http!;
     expect(app.port).toBeGreaterThan(0);
 
-    // 2. Two teammates join via REST (no coordinator role)
+    // 2. Two teammates join via REST (no join code required in v2.0.0)
     const aliceRes = await fetch(`${app.url}/api/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ display_name: 'Alice', join_code: session.join_code }),
+      body: JSON.stringify({ display_name: 'Alice' }),
     });
     expect(aliceRes.status).toBe(200);
+    const aliceData = (await aliceRes.json()) as { id: string };
     const aliceCookie = aliceRes.headers.get('set-cookie')!.split(';')[0]!;
+    // v2.0.0: approve so Alice can post suggestions/comments.
+    mgr.approveParticipant(aliceData.id as Parameters<typeof mgr.approveParticipant>[0]);
 
     const bobRes = await fetch(`${app.url}/api/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ display_name: 'Bob', join_code: session.join_code }),
+      body: JSON.stringify({ display_name: 'Bob' }),
     });
     expect(bobRes.status).toBe(200);
+    const bobData = (await bobRes.json()) as { id: string };
     const bobCookie = bobRes.headers.get('set-cookie')!.split(';')[0]!;
+    // v2.0.0: approve so Bob can post comments.
+    mgr.approveParticipant(bobData.id as Parameters<typeof mgr.approveParticipant>[0]);
 
     // 3. Ask a question (broadcasts immediately, no preview gate)
     const ticket = askGroup({
@@ -128,15 +134,19 @@ describe('Full integration: start → join → ask → suggest → record → st
   });
 
   it('GET /api/session returns full view for joined participant', async () => {
-    const session = await startSession({ brief: 'test' }, { transportFactory: 'mock' });
+    const _session = await startSession({ brief: 'test' }, { transportFactory: 'mock' });
+    const mgr = mcpState.manager!;
     const app = mcpState.http!;
 
     const joinRes = await fetch(`${app.url}/api/join`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ display_name: 'Bob', join_code: session.join_code }),
+      body: JSON.stringify({ display_name: 'Bob' }),
     });
+    const bobData = (await joinRes.json()) as { id: string };
     const cookie = joinRes.headers.get('set-cookie')!.split(';')[0]!;
+    // v2.0.0: approve so Bob can access /api/session.
+    mgr.approveParticipant(bobData.id as Parameters<typeof mgr.approveParticipant>[0]);
 
     const sessRes = await fetch(`${app.url}/api/session`, {
       headers: { cookie },

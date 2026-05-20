@@ -20,7 +20,7 @@ test('tunnel banner: dismiss applies to one URL only; new URL re-shows it (Pitfa
   await page.goto(session.public_url);
   await expect(page.getByLabel(/display name/i)).toBeVisible();
   await page.getByLabel(/display name/i).fill('Alice');
-  await page.getByLabel(/join code/i).fill(session.join_code);
+  // No join code in v2.0.0 — approval-gate model.
   await page.getByRole('button', { name: /join session/i }).click();
   await expect(page.getByText(/waiting for a question from the ai host/i)).toBeVisible({
     timeout: 10_000,

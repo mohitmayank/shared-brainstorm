@@ -61,7 +61,7 @@ beforeEach(async () => {
 });
 
 describe('startSession', () => {
-  it('creates a session and returns session_id, public_url, join_code, invite_text', async () => {
+  it('creates a session and returns session_id, public_url, invite_text (no join_code in v2.0.0)', async () => {
     const dir = makeTmpDir();
     try {
       const result = await startSession(
@@ -75,9 +75,8 @@ describe('startSession', () => {
       );
       expect(result.session_id).toMatch(/^sb_s_/);
       expect(result.public_url).toMatch(/^http:\/\//);
-      expect(result.join_code).toMatch(/^\d{6}$/);
+      expect((result as unknown as Record<string, unknown>)['join_code']).toBeUndefined();
       expect(result.invite_text).toContain(result.public_url);
-      expect(result.invite_text).toContain(result.join_code);
       expect(result.clipboard_copied).toBe(true);
       expect(result.coordinator_url).toMatch(
         /^https?:\/\/.+\?role=coordinator&token=[A-Za-z0-9_-]{22}$/,
@@ -130,7 +129,7 @@ describe('startSession', () => {
       );
       expect(copyCalled).toBe(false);
       expect(result.clipboard_copied).toBe(false);
-      expect(result.invite_text).toContain(result.join_code);
+      expect(result.invite_text).toContain(result.public_url);
     } finally {
       if (original === undefined) delete process.env['SHARED_BRAINSTORM_NO_CLIPBOARD'];
       else process.env['SHARED_BRAINSTORM_NO_CLIPBOARD'] = original;

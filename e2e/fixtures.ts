@@ -10,7 +10,6 @@ interface SessionFixture {
   session: {
     session_id: string;
     public_url: string;
-    join_code: string;
     invite_text: string;
     transcriptDir: string;
     // 03-06: the coordinator surface (parallel to public_url). `coordinator_url`

@@ -176,10 +176,15 @@ export function buildApp({
     try {
       expected = manager.coordinatorToken();
     } catch {
-      // The session is no longer active (mcpState.manager = null after
-      // stopSession). A late coordinator request after teardown returns 401
-      // with a distinct error code, not a 500.
-      return c.json({ error: 'session_ended' }, 401);
+      // WR-01: the session is no longer active (mcpState.manager = null after
+      // stopSession). Return 404 `session_ended` to match the sibling
+      // `/api/coordinator/join` and `/api/coordinator/answer` endpoints, so the
+      // web client's `status === 404` "Session ended" branch is deterministic
+      // regardless of whether the torn-down condition is observed in this
+      // middleware or in the handler's `sessionView()` read. 401
+      // `not_coordinator` is reserved strictly for a present-but-wrong/absent
+      // cookie against a *live* session.
+      return c.json({ error: 'session_ended' }, 404);
     }
     if (!tokenMatches(cookie, expected)) {
       return c.json({ error: 'not_coordinator' }, 401);

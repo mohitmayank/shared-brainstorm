@@ -116,6 +116,11 @@ export function App() {
   // Phase 5 (PRES-02): per-actor presence expiry timers. Keyed by actor_id or
   // '__coordinator'. Mirrors the fallbackTimers pattern in Coordinator.tsx.
   const presenceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  // WR-01 fix: track the latest activity per presence key, written synchronously in
+  // the same onEvent pass. The idle branch consults this (NOT stale `state`, since
+  // startWs is useCallback([])) to avoid cancelling the 6s 'submitted' timer when a
+  // trailing typing-stop idle frame arrives AFTER suggestion_added (frame Ordering B).
+  const presenceActivity = useRef<Map<string, 'typing' | 'picking' | 'submitted'>>(new Map());
   const [joinError, setJoinError] = useState<string | null>(null);
   // True when the server returned 423 (coordinator locked the room).
   const [joinLocked, setJoinLocked] = useState(false);
@@ -162,9 +167,11 @@ export function App() {
   // Phase 5 (PRES-02): clear all presence expiry timers on unmount.
   useEffect(() => {
     const timers = presenceTimers.current;
+    const activity = presenceActivity.current;
     return () => {
       for (const handle of timers.values()) clearTimeout(handle);
       timers.clear();
+      activity.clear();
     };
   }, []);
 
@@ -177,6 +184,7 @@ export function App() {
     if (state.sessionStatus === 'done') {
       for (const h of presenceTimers.current.values()) clearTimeout(h);
       presenceTimers.current.clear();
+      presenceActivity.current.clear();
     }
   }, [state.sessionStatus]);
 
@@ -248,31 +256,37 @@ export function App() {
             import('@shared-brainstorm/shared').EphemeralFrame,
             { type: 'presence' }
           >;
-          if (presenceFrame.payload.activity !== 'idle') {
+          const activity = presenceFrame.payload.activity;
+          if (activity !== 'idle') {
             const key = presenceFrame.payload.actor_id ?? '__coordinator';
+            // Record activity synchronously so a later idle frame can tell whether
+            // this key is a sticky 'submitted' entry (only 'typing'/'picking' here).
+            presenceActivity.current.set(key, activity);
             const existing = presenceTimers.current.get(key);
             if (existing !== undefined) clearTimeout(existing);
             presenceTimers.current.set(
               key,
               setTimeout(() => {
                 presenceTimers.current.delete(key);
+                presenceActivity.current.delete(key);
                 dispatch({ type: 'presence_expired', key } satisfies PresenceExpireAction);
               }, 4000),
             );
           } else {
-            // idle frame: clear the per-key timer unconditionally. The reducer is the
-            // single source of truth for presence membership — it now guards 'submitted'
-            // entries from being wiped (state.ts applyEphemeralFrame idle branch). The
-            // 6s submitted timer was already installed by the suggestion_added branch
-            // below (and replaced the 4s typing timer at that point); on idle we only
-            // need to cancel the residual 4s typing/picking timer. Reading state.presence
-            // here would see stale closure data (startWs is useCallback([]) and captures
-            // state from the first render only), so we do not consult it.
+            // idle frame: cancel the residual typing/picking timer — BUT NOT the 6s
+            // 'submitted' timer. The reducer keeps 'submitted' entries (state.ts idle
+            // branch), so cancelling their timer here would strand the line forever
+            // (frame Ordering B: suggestion_added before the trailing typing-stop).
+            // presenceActivity is the synchronous source of truth (stale `state` cannot
+            // be read inside this useCallback([]) closure).
             const key = presenceFrame.payload.actor_id ?? '__coordinator';
-            const existing = presenceTimers.current.get(key);
-            if (existing !== undefined) {
-              clearTimeout(existing);
-              presenceTimers.current.delete(key);
+            if (presenceActivity.current.get(key) !== 'submitted') {
+              const existing = presenceTimers.current.get(key);
+              if (existing !== undefined) {
+                clearTimeout(existing);
+                presenceTimers.current.delete(key);
+              }
+              presenceActivity.current.delete(key);
             }
           }
         }
@@ -281,12 +295,16 @@ export function App() {
           const participantId = (
             frame as unknown as { payload: { suggestion: { participant_id: string } } }
           ).payload.suggestion.participant_id;
+          // Mark 'submitted' synchronously so a trailing typing-stop idle frame for the
+          // same participant does NOT cancel this 6s timer (WR-01 frame Ordering B).
+          presenceActivity.current.set(participantId, 'submitted');
           const existing = presenceTimers.current.get(participantId);
           if (existing !== undefined) clearTimeout(existing);
           presenceTimers.current.set(
             participantId,
             setTimeout(() => {
               presenceTimers.current.delete(participantId);
+              presenceActivity.current.delete(participantId);
               dispatch({ type: 'presence_expired', key: participantId } satisfies PresenceExpireAction);
             }, 6000),
           );

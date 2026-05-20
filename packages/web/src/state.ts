@@ -103,6 +103,17 @@ function isEphemeralFrame(frame: AnyFrame): frame is EphemeralFrame {
   return !('seq' in frame);
 }
 
+/**
+ * WR-05: single source of truth for the back-compat `current_question` field.
+ * Matches the server's `sessionView()` open-only definition: returns the first
+ * question with status === 'broadcast', or null. Used by all four handler sites
+ * (withOpenQuestion / question_broadcast / question_resolved / question_cancelled)
+ * so no divergent derivation can creep in.
+ */
+function firstOpen(questions: WireQuestion[]): WireQuestion | null {
+  return questions.find((q) => q.status === 'broadcast') ?? null;
+}
+
 function withOpenQuestion(
   session: WireSession,
   questionId: string,
@@ -114,7 +125,7 @@ function withOpenQuestion(
   return {
     ...session,
     questions: newQuestions,
-    current_question: newQuestions[0] ?? null, // keep derived back-compat field in sync
+    current_question: firstOpen(newQuestions), // WR-05: use unified helper (first 'broadcast' q)
   };
 }
 
@@ -217,7 +228,7 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       session: {
         ...state.session,
         questions: newQuestions,
-        current_question: newQuestions[0] ?? null, // derived back-compat
+        current_question: firstOpen(newQuestions), // WR-05: use unified helper
       },
     };
   }
@@ -333,7 +344,7 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       session: {
         ...state.session,
         questions: filteredQuestions,
-        current_question: filteredQuestions[0] ?? null,
+        current_question: firstOpen(filteredQuestions), // WR-05: use unified helper
       },
     };
   }

@@ -47,6 +47,22 @@ function buildWsUrl(lastSeq: number): string {
 // as the signal to drop back to the Join page instead of auto-reconnecting.
 const NOT_JOINED_CODE = 1008;
 
+/**
+ * CR-02: classify a 1008 close reason into one of three categories:
+ *  - 'removed'   — participant was kicked; show removed screen, do NOT auto-join
+ *  - 'not_joined' — cookie absent/stale; may auto-join with remembered name
+ *  - 'unknown'   — fail-safe: show Join form, do NOT auto-join (ambiguous)
+ *
+ * Exported for unit testing — this is the sole source of truth for close-reason
+ * routing. App.tsx `onClose` calls this rather than inlining the comparison so
+ * the branching logic can be verified without a React rendering harness.
+ */
+export function classifyCloseReason(reason: string): 'removed' | 'not_joined' | 'unknown' {
+  if (reason === 'removed') return 'removed';
+  if (reason === 'not_joined') return 'not_joined';
+  return 'unknown';
+}
+
 // Show the "Try now" inline prompt after this many consecutive WS close-without-
 // welcome cycles (REL-04 / D-19). No retry cap — the loop continues at the 30s
 // backoff ceiling indefinitely; the prompt is purely advisory.
@@ -104,6 +120,13 @@ export function App() {
   // close, we don't want to flash the Join form.
   const [resuming, setResuming] = useState(true);
   const [needsJoin, setNeedsJoin] = useState(false);
+  // CR-02: set when the server closes with 1008 / 'removed' (kicked participant
+  // reload path). The reducer's myStatus field covers the live-kick path
+  // (participant_status_changed arrives before WS close), but on a page reload
+  // reducer state is initialState (myStatus === null) and the WS upgrade is
+  // rejected before any welcome can set it. This local flag bridges the gap:
+  // the removed screen is reachable from BOTH the live-kick and the reload path.
+  const [wasKicked, setWasKicked] = useState(false);
 
   // COORD-01: coordinator-mode is fixed at mount from the URL. When present we
   // never show the participant Join form — instead we validate the token and
@@ -149,6 +172,14 @@ export function App() {
   // CR-01: ref to handleJoin so the onClose closure can trigger a fresh join
   // without depending on handleJoin in the startWs useCallback dep array.
   const handleJoinRef = useRef<(name: string) => Promise<void>>(() => Promise.resolve());
+  // CR-02: mirror wasKicked into a ref so the onClose closure can check it.
+  // Once the removed screen is shown we must not auto-join on subsequent
+  // reconnect attempts (the 1008/'removed' gate ensures we never get a welcome,
+  // but the backoff loop must also stop).
+  const wasKickedRef = useRef<boolean>(false);
+  useEffect(() => {
+    wasKickedRef.current = wasKicked;
+  }, [wasKicked]);
 
   const startWs = useCallback((lastSeq: number) => {
     if (wsRef.current) {
@@ -190,9 +221,35 @@ export function App() {
             setCoordinatorStatus('invalid');
             return;
           }
-          // Cookie was missing/stale — try the remembered name first (CR-01:
-          // only auto-join when there is genuinely no server-recognized identity;
-          // never re-POST if a valid sb_p cookie already exists).
+          // CR-02: branch on close reason to prevent kick-evasion on reload.
+          // The server sends distinct reason strings for each rejection cause:
+          //   'removed'   — participant was kicked; must NOT auto-rejoin
+          //   'not_joined' — no valid cookie; may auto-join with remembered name
+          //   (unknown/empty) — treat as terminal; do NOT auto-join (fail-safe)
+          const closeClass = classifyCloseReason(info.reason);
+          if (closeClass === 'removed') {
+            // Kicked participant reload path: the WS upgrade is rejected before
+            // any welcome arrives, so the reducer's myStatus is still null on
+            // reload. Set a dedicated local flag to surface the removed screen
+            // without depending on a welcome that will never arrive.
+            setResuming(false);
+            setWasKicked(true);
+            wasKickedRef.current = true;
+            return;
+          }
+          if (closeClass === 'unknown') {
+            // Unknown/empty reason on a 1008 close — fail-safe: show the Join
+            // form rather than silently re-admitting. A coordinator-kicked user
+            // with a stale reason string is better served by seeing the form
+            // (where they can learn they need to re-ask) than being auto-admitted.
+            setResuming(false);
+            setNeedsJoin(true);
+            return;
+          }
+          // closeClass === 'not_joined': cookie was missing/stale — try the
+          // remembered name first (CR-01: only auto-join when there is genuinely
+          // no server-recognized identity; never re-POST if a valid sb_p cookie
+          // already exists).
           const remembered = getName();
           if (remembered && !joinLockedRef.current) {
             void handleJoinRef.current(remembered);
@@ -377,7 +434,13 @@ export function App() {
         <div className="card" style={{ marginTop: '2rem' }}>
           <p className="muted">Validating coordinator link…</p>
         </div>
-      ) : state.myStatus === 'kicked' ? (
+      ) : (state.myStatus === 'kicked' || wasKicked) ? (
+        // CR-02: show removed screen for BOTH paths:
+        //  1. Live kick: server broadcasts participant_status_changed{status:'kicked'} BEFORE
+        //     closing the WS — reducer sets myStatus='kicked' which persists across reconnects.
+        //  2. Reload after kick: WS upgrade is rejected (1008/'removed') before any welcome
+        //     arrives; the reducer is at initialState (myStatus===null). The wasKicked local
+        //     state flag bridges this gap so the removed screen is still shown.
         <div className="card" style={{ marginTop: '2rem' }} data-testid="join-removed" role="alert">
           <h1>You were removed from this session</h1>
           <p className="muted">

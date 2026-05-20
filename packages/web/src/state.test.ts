@@ -1,5 +1,5 @@
 /** @vitest-environment jsdom */
-import { describe, it, expect } from 'vitest';
+import { describe, it, beforeAll, expect } from 'vitest';
 import { reduce, initialState } from './state.js';
 import type { AnyFrame } from '@shared-brainstorm/shared';
 
@@ -475,5 +475,145 @@ describe('reduce — roomLocked from welcome (WR-01)', () => {
     };
     const next = reduce(initialState, evt);
     expect(next.roomLocked).toBe(true);
+  });
+});
+
+describe('reduce — participant_status_changed (Phase 4 / CR-02 regression)', () => {
+  // Base state: Alice (sb_p_001) is the active user, approved.
+  const baseState = reduce(initialState, welcomeEphemeral);
+
+  it('sets myStatus to kicked when participant_status_changed targets the current user', () => {
+    const kickEvt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:05Z',
+      type: 'participant_status_changed',
+      payload: { participant_id: 'sb_p_001', status: 'kicked' as const },
+    };
+    const next = reduce(baseState, kickEvt);
+    expect(next.myStatus).toBe('kicked');
+  });
+
+  it('does NOT reset myStatus when a different participant is status-changed', () => {
+    // Add Bob first, then kick Bob — Alice's myStatus must stay 'approved'.
+    const joinEvt: AnyFrame = {
+      seq: 1,
+      ts: '2026-01-01T00:00:01Z',
+      type: 'participant_joined',
+      payload: {
+        participant: {
+          id: 'sb_p_002',
+          display_name: 'Bob',
+          joined_at: '2026-01-01T00:00:01Z',
+          status: 'pending' as const,
+        },
+      },
+    };
+    const withBob = reduce(baseState, joinEvt);
+    const kickBobEvt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:05Z',
+      type: 'participant_status_changed',
+      payload: { participant_id: 'sb_p_002', status: 'kicked' as const },
+    };
+    const next = reduce(withBob, kickBobEvt);
+    // Alice is still approved
+    expect(next.myStatus).toBe('approved');
+    // Bob's roster entry is updated to kicked
+    expect(next.session?.participants.find((p) => p.id === 'sb_p_002')?.status).toBe('kicked');
+  });
+
+  it('myStatus stays kicked — the reducer never clears it on its own (live-kick persistence)', () => {
+    // Regression for CR-02 concern: myStatus must NOT be reset when the WS closes.
+    // React state survives WS reconnect cycles within the same page load. The
+    // kicked participant sees the removed screen on all subsequent reconnect attempts.
+    // This test confirms no reducer branch accidentally clears myStatus after a kick.
+    const kickEvt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:05Z',
+      type: 'participant_status_changed',
+      payload: { participant_id: 'sb_p_001', status: 'kicked' as const },
+    };
+    const kicked = reduce(baseState, kickEvt);
+    expect(kicked.myStatus).toBe('kicked');
+    // Simulate a replay of an already-seen seq (WR-07 guard drops it) — myStatus unchanged.
+    const afterDrop = reduce(kicked, kickEvt);
+    expect(afterDrop.myStatus).toBe('kicked');
+    expect(afterDrop).toBe(kicked); // guard returns same reference
+  });
+
+  it('myStatus transitions pending → approved correctly (welcome then approve)', () => {
+    // Build a state where Alice is pending (fresh join).
+    const pendingWelcome: AnyFrame = {
+      type: 'welcome',
+      payload: {
+        session: {
+          session_id: 'sb_s_001',
+          brief: 'test session',
+          participants: [
+            {
+              id: 'sb_p_001',
+              display_name: 'Alice',
+              joined_at: '2026-01-01T00:00:00Z',
+              status: 'pending' as const,
+            },
+          ],
+          decisions: [],
+          current_question: null,
+          locked: false,
+        },
+        you: {
+          id: 'sb_p_001',
+          display_name: 'Alice',
+          joined_at: '2026-01-01T00:00:00Z',
+          status: 'pending' as const,
+        },
+        is_coordinator: false,
+      },
+    };
+    const pending = reduce(initialState, pendingWelcome);
+    expect(pending.myStatus).toBe('pending');
+
+    const approveEvt: AnyFrame = {
+      seq: 1,
+      ts: '2026-01-01T00:00:01Z',
+      type: 'participant_status_changed',
+      payload: { participant_id: 'sb_p_001', status: 'approved' as const },
+    };
+    const approved = reduce(pending, approveEvt);
+    expect(approved.myStatus).toBe('approved');
+  });
+});
+
+describe('App — classifyCloseReason (CR-02 regression: kick-evasion on reload)', () => {
+  // These tests verify that the close-reason routing function routes correctly:
+  //  - reason 'removed' must never trigger auto-join (→ removed screen)
+  //  - reason 'not_joined' must trigger auto-join with remembered name
+  //  - reason unknown/empty must show Join form without auto-join (fail-safe)
+  //
+  // This is a pure function test — no React rendering harness required.
+  // The function is exported from App.tsx as a named export.
+  let classifyCloseReason: (reason: string) => 'removed' | 'not_joined' | 'unknown';
+
+  beforeAll(async () => {
+    const mod = await import('./App.js');
+    classifyCloseReason = mod.classifyCloseReason;
+  });
+
+  it('classifies reason "removed" as removed (kicked participant — must NOT auto-join)', () => {
+    expect(classifyCloseReason('removed')).toBe('removed');
+  });
+
+  it('classifies reason "not_joined" as not_joined (stale cookie — may auto-join)', () => {
+    expect(classifyCloseReason('not_joined')).toBe('not_joined');
+  });
+
+  it('classifies empty reason string as unknown (fail-safe — must NOT auto-join)', () => {
+    expect(classifyCloseReason('')).toBe('unknown');
+  });
+
+  it('classifies any other reason string as unknown (fail-safe)', () => {
+    expect(classifyCloseReason('session_ended')).toBe('unknown');
+    expect(classifyCloseReason('stale')).toBe('unknown');
+    expect(classifyCloseReason('some_future_reason')).toBe('unknown');
   });
 });

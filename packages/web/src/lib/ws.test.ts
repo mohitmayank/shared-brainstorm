@@ -122,4 +122,24 @@ describe('connectWs', () => {
     expect(onClose).toHaveBeenCalledOnce();
     expect(onClose).toHaveBeenCalledWith({ code: 1008, reason: 'not_joined' });
   });
+
+  it('passes "removed" reason verbatim on 1008 close (CR-02: kick-evasion regression)', () => {
+    // Regression test: the ws layer must forward the close reason unchanged so
+    // App.tsx onClose can distinguish 'removed' (kicked) from 'not_joined'.
+    // If this test fails, App.tsx will never receive 'removed' and a kicked
+    // participant will always be able to re-admit themselves on reload.
+    const onClose = vi.fn();
+    connectWs({ url: 'ws://localhost', lastSeq: -1, onEvent: vi.fn(), onClose });
+    lastWs!._trigger('close', { code: 1008, reason: 'removed' });
+    expect(onClose).toHaveBeenCalledWith({ code: 1008, reason: 'removed' });
+  });
+
+  it('passes empty reason string through on abnormal close (1006)', () => {
+    // 1006 (abnormal close) typically has no reason string — must be forwarded
+    // as-is so App.tsx backoff logic handles it (not treated as 1008).
+    const onClose = vi.fn();
+    connectWs({ url: 'ws://localhost', lastSeq: -1, onEvent: vi.fn(), onClose });
+    lastWs!._trigger('close', { code: 1006, reason: '' });
+    expect(onClose).toHaveBeenCalledWith({ code: 1006, reason: '' });
+  });
 });

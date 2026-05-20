@@ -8,6 +8,7 @@ const sessionShape = {
   decisions: [],
   current_question: null,
   locked: false,
+  session_status: 'waiting' as const,
 };
 const youShape = { id: 'sb_p_x', display_name: 'Alice', joined_at: 'x', status: 'pending' as const };
 

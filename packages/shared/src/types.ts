@@ -42,6 +42,8 @@ export interface Question {
   resolution: { value: string; source: AnswerSource; recorded_at: string } | null;
 }
 
+export type SessionStatus = 'waiting' | 'question_open' | 'choosing' | 'done';
+
 export interface SessionView {
   session_id: SessionId;
   brief: string;
@@ -49,4 +51,5 @@ export interface SessionView {
   decisions: { question: string; answer: string; question_id: QuestionId }[];
   current_question: Question | null;
   locked: boolean;
+  session_status: SessionStatus;
 }

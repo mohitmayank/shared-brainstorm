@@ -55,6 +55,7 @@ const SessionViewSchema = z.object({
   ),
   current_question: QuestionSchema.nullable(),
   locked: z.boolean(),
+  session_status: z.enum(['waiting', 'question_open', 'choosing', 'done']),
 });
 
 const Envelope = <P extends z.ZodTypeAny>(type: string, payload: P) =>
@@ -107,6 +108,10 @@ export const ServerEvent = z.discriminatedUnion('type', [
     }),
   ),
   Envelope('room_locked', z.object({ locked: z.boolean() })),
+  Envelope(
+    'session_status_changed',
+    z.object({ status: z.enum(['waiting', 'question_open', 'choosing', 'done']) }),
+  ),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
 

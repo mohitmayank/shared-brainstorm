@@ -3,8 +3,6 @@ import { reduce, initialState } from './state.js';
 import {
   getName,
   setName,
-  getJoinCode,
-  setJoinCode,
   getLastSeq,
   setLastSeq,
   getTheme,
@@ -99,6 +97,8 @@ export function App() {
   const wsRef = useRef<WsHandle | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [joinError, setJoinError] = useState<string | null>(null);
+  // True when the server returned 423 (coordinator locked the room).
+  const [joinLocked, setJoinLocked] = useState(false);
   // On first mount we optimistically attempt to resume via the existing
   // participant cookie. While we wait for either welcome or a not_joined
   // close, we don't want to flash the Join form.
@@ -261,16 +261,21 @@ export function App() {
   }, []);
 
   const handleJoin = useCallback(
-    async (name: string, code: string) => {
+    async (name: string) => {
       setJoinError(null);
+      setJoinLocked(false);
       try {
-        await join({ display_name: name, join_code: code });
+        await join({ display_name: name });
         setName(name);
-        setJoinCode(code);
         setNeedsJoin(false);
         startWs(getLastSeq());
       } catch (e) {
-        setJoinError(String(e));
+        const status = (e as { status?: number }).status;
+        if (status === 423) {
+          setJoinLocked(true);
+        } else {
+          setJoinError(String(e));
+        }
       }
     },
     [startWs],
@@ -342,9 +347,9 @@ export function App() {
       ) : (
         <Join
           defaultName={getName() ?? ''}
-          defaultCode={getJoinCode() ?? ''}
           onSubmit={handleJoin}
           error={joinError}
+          locked={joinLocked}
         />
       )}
       <footer className="app-footer">

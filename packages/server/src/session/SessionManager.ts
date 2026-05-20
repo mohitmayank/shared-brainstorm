@@ -1,5 +1,4 @@
 import {
-  newJoinCode,
   newCoordinatorToken,
   newParticipantId,
   newQuestionId,
@@ -58,13 +57,14 @@ interface ActiveSession {
   id: SessionId;
   brief: string;
   started_at: string;
-  join_code: string;
   /**
    * High-entropy coordinator token. Minted once in start(), dies on stop().
    * MUST NOT appear in sessionView(), any ServerEvent payload, the transcript,
    * or logs — it is the only credential gating the coordinator browser view.
    */
   coordinator_token: string;
+  /** Phase 4: whether the room is locked to new participants. */
+  locked: boolean;
   participants: Map<ParticipantId, Participant>;
   decisions: { question: string; answer: string; question_id: QuestionId }[];
   current_question: Question | null;
@@ -92,28 +92,21 @@ export class SessionManager {
     return this.active !== null;
   }
 
-  start({ brief }: { brief: string }): { session_id: SessionId; join_code: string } {
+  start({ brief }: { brief: string }): { session_id: SessionId } {
     if (this.active) throw new Error('a session is already active');
     const session_id = newSessionId();
     this.active = {
       id: session_id,
       brief,
       started_at: this.opts.clock.isoNow(),
-      join_code: newJoinCode(),
       coordinator_token: newCoordinatorToken(),
+      locked: false,
       participants: new Map(),
       decisions: [],
       current_question: null,
       ticket_to_question: new Map(),
     };
-    return {
-      session_id,
-      join_code: this.active.join_code,
-    };
-  }
-
-  joinCode(): string {
-    return this.requireActive().join_code;
+    return { session_id };
   }
 
   /**
@@ -142,6 +135,7 @@ export class SessionManager {
       id: newParticipantId(),
       display_name: args.display_name,
       joined_at: this.opts.clock.isoNow(),
+      status: 'pending',
     };
     a.participants.set(p.id, p);
     this.emit({ type: 'participant_joined', payload: { participant: p } });
@@ -369,6 +363,37 @@ export class SessionManager {
     return this.active?.current_question ?? null;
   }
 
+  approveParticipant(id: ParticipantId): void {
+    const a = this.requireActive();
+    const p = a.participants.get(id);
+    if (!p) throw new Error(`approveParticipant: unknown id ${id}`);
+    if (p.status !== 'pending') return; // idempotent
+    p.status = 'approved';
+    this.emit({
+      type: 'participant_status_changed',
+      payload: { participant_id: id, status: 'approved' },
+    });
+  }
+
+  kickParticipant(id: ParticipantId): void {
+    const a = this.requireActive();
+    const p = a.participants.get(id);
+    if (!p) throw new Error(`kickParticipant: unknown id ${id}`);
+    if (p.status === 'kicked') return; // idempotent
+    p.status = 'kicked';
+    this.emit({
+      type: 'participant_status_changed',
+      payload: { participant_id: id, status: 'kicked' },
+    });
+  }
+
+  setLocked(locked: boolean): void {
+    const a = this.requireActive();
+    if (a.locked === locked) return; // idempotent
+    a.locked = locked;
+    this.emit({ type: 'room_locked', payload: { locked } });
+  }
+
   sessionView(): SessionView {
     const a = this.requireActive();
     return {
@@ -377,6 +402,7 @@ export class SessionManager {
       participants: [...a.participants.values()],
       decisions: a.decisions,
       current_question: a.current_question,
+      locked: a.locked,
     };
   }
 

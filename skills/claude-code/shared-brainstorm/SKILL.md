@@ -12,28 +12,28 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
    Call `startSession` with a brief description of what you're working on.
    ```
    startSession({ brief: "API rate-limiting strategy" })
-   → { session_id, public_url, join_code, coordinator_url }
+   → { session_id, public_url, coordinator_url }
    ```
-   Show the user the public URL and join code so they can share both with the team. Example:
+   Show the user the public URL so they can share it with the team. Teammates join as pending — the coordinator must approve each one. Example:
    ```
    Session started!
    Share link: https://abc123.trycloudflare.com
-   Join code: 426193
+   (Teammates will need your approval to join)
    ```
 
    ### Output fields
 
-   **`coordinator_url`** — a one-time URL the initiator (you, the human) can open in their own browser to drive the session from a coordinator view (see suggestions in real time, pick the final answer). Print this URL to the initiator on a line of its own — for example:
+   **`coordinator_url`** — a one-time URL the initiator (you, the human) can open in their own browser to drive the session from a coordinator view (see pending joiners, approve/kick participants, pick the final answer). Print this URL to the initiator on a line of its own — for example:
 
    ```
    Your coordinator link (only for the initiator):
    {coordinator_url}
 
    Share link for teammates:
-   {public_url}   (join code {join_code})
+   {public_url}   (approval required)
    ```
 
-   **WARNING: do NOT include `coordinator_url` in the message you send to teammates.** Anyone who opens that URL becomes the session coordinator. Share only `public_url` + `join_code` with the team.
+   **WARNING: do NOT include `coordinator_url` in the message you send to teammates.** Anyone who opens that URL becomes the session coordinator. Share only `public_url` with the team.
 
 2. **Ask a question**
    ```

@@ -31,12 +31,13 @@ import { copyToClipboard as defaultCopyToClipboard } from '../util/clipboard.js'
 import { isTruthyEnv } from '../util/env.js';
 import { mcpState } from './state.js';
 
-function buildInviteText(publicUrl: string, joinCode: string): string {
+function buildInviteText(publicUrl: string): string {
   return [
     "Hi! I'm running a quick team brainstorm — would love your input.",
     '',
     `Join: ${publicUrl}`,
-    `Join code: ${joinCode}`,
+    '',
+    'The host will approve you once you open the link.',
     '',
     'Powered by shared-brainstorm.',
   ].join('\n');
@@ -139,7 +140,6 @@ export async function startSession(
 ): Promise<{
   session_id: string;
   public_url: string;
-  join_code: string;
   invite_text: string;
   clipboard_copied: boolean;
   coordinator_url: string;
@@ -158,7 +158,7 @@ export async function startSession(
     transcriptDir,
   });
 
-  const { session_id, join_code } = manager.start({ brief: input.brief });
+  const { session_id } = manager.start({ brief: input.brief });
 
   // ── Phase 2 (02-04) restructure ────────────────────────────────────────
   // 1. Construct the transport WITHOUT calling .start() yet.
@@ -296,7 +296,7 @@ export async function startSession(
   mcpState.http = http;
   mcpState.publicUrl = publicUrl;
 
-  const invite_text = buildInviteText(publicUrl, join_code);
+  const invite_text = buildInviteText(publicUrl);
 
   // Phase 3 (COORD-01): compose the coordinator URL from the public URL using
   // the URL API so trailing slashes / pre-existing query strings are handled
@@ -317,7 +317,6 @@ export async function startSession(
   return {
     session_id,
     public_url: publicUrl,
-    join_code,
     invite_text,
     clipboard_copied,
     coordinator_url,

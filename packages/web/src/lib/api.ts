@@ -16,12 +16,13 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export interface JoinArgs {
   display_name: string;
-  join_code: string;
+  // join_code removed in v2.0.0
 }
 
 export interface JoinResult {
   id: string;
   display_name: string;
+  status: string;
 }
 
 export function join(args: JoinArgs): Promise<JoinResult> {
@@ -77,4 +78,16 @@ export interface CoordinatorAnswerArgs {
  */
 export function postCoordinatorAnswer(args: CoordinatorAnswerArgs): Promise<{ ok: boolean }> {
   return post<{ ok: boolean }>('/api/coordinator/answer', args);
+}
+
+export function postApprove(args: { participant_id: string }): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>('/api/coordinator/approve', args);
+}
+
+export function postKick(args: { participant_id: string }): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>('/api/coordinator/kick', args);
+}
+
+export function postLock(args: { locked: boolean }): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>('/api/coordinator/lock', args);
 }

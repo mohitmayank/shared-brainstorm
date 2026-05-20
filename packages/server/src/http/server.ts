@@ -25,7 +25,6 @@ type AppEnv = { Variables: { participant: Participant } };
 
 const JoinBody = z.object({
   display_name: z.string().min(1).max(40),
-  join_code: z.string().regex(/^\d{6}$/),
 });
 
 const SuggestionBody = z.object({
@@ -48,6 +47,10 @@ const CoordinatorAnswerBody = z.object({
   value: z.string().min(1).max(2000),
   source: z.enum(['suggestion', 'synthesis', 'override']),
 });
+
+const ApproveBody = z.object({ participant_id: z.string() });
+const KickBody = z.object({ participant_id: z.string() });
+const LockBody = z.object({ locked: z.boolean() });
 
 /**
  * REL-07 / D-06: type-narrowing guard for cap errors thrown by SessionManager.
@@ -138,8 +141,8 @@ export function buildApp({
   app.post('/api/join', joinRateLimit, async (c) => {
     const parsed = JoinBody.safeParse(await c.req.json().catch(() => ({})));
     if (!parsed.success) return c.json({ error: 'invalid' }, 400);
-    if (parsed.data.join_code !== manager.joinCode())
-      return c.json({ error: 'bad_join_code' }, 403);
+    // Phase 4: check lock state before adding participant
+    if (manager.sessionView().locked) return c.json({ error: 'session_locked' }, 423);
     let p: Participant;
     try {
       p = manager.addParticipant({ display_name: parsed.data.display_name });
@@ -148,7 +151,7 @@ export function buildApp({
       throw e;
     }
     setParticipantCookie(c, p.id, { secure: resolveSecure() });
-    return c.json({ id: p.id, display_name: p.display_name });
+    return c.json({ id: p.id, display_name: p.display_name, status: p.status });
   });
 
   const requireParticipant: MiddlewareHandler<AppEnv> = async (c, next) => {
@@ -157,6 +160,9 @@ export function buildApp({
     const v = manager.sessionView();
     const p = v.participants.find((x) => x.id === id);
     if (!p) return c.json({ error: 'not_joined' }, 401);
+    // Phase 4: kicked participants cannot post; pending participants cannot post
+    if (p.status === 'kicked') return c.json({ error: 'removed' }, 403);
+    if (p.status === 'pending') return c.json({ error: 'not_approved' }, 403);
     c.set('participant', p);
     await next();
   };
@@ -249,6 +255,44 @@ export function buildApp({
         return c.json({ error: 'already_resolved' }, 409);
       }
       throw e;
+    }
+  });
+
+  // Phase 4: coordinator approve/kick/lock endpoints
+  app.post('/api/coordinator/approve', requireCoordinator, async (c) => {
+    const parsed = ApproveBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid' }, 400);
+    try {
+      manager.approveParticipant(parsed.data.participant_id as ParticipantId);
+      return c.json({ ok: true });
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (msg.includes('unknown id')) return c.json({ error: 'not_found' }, 404);
+      throw e;
+    }
+  });
+
+  app.post('/api/coordinator/kick', requireCoordinator, async (c) => {
+    const parsed = KickBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid' }, 400);
+    try {
+      manager.kickParticipant(parsed.data.participant_id as ParticipantId);
+      return c.json({ ok: true });
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (msg.includes('unknown id')) return c.json({ error: 'not_found' }, 404);
+      throw e;
+    }
+  });
+
+  app.post('/api/coordinator/lock', requireCoordinator, async (c) => {
+    const parsed = LockBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid' }, 400);
+    try {
+      manager.setLocked(parsed.data.locked);
+      return c.json({ ok: true });
+    } catch {
+      return c.json({ error: 'session_ended' }, 404);
     }
   });
 

@@ -55,6 +55,19 @@ export interface UiState {
    * server's authority and is re-applied on reconnect (no stale carry-over).
    */
   isCoordinator: boolean;
+  /**
+   * The current participant's approval status, derived from `welcome.you.status`
+   * and `participant_status_changed` events. null before the first welcome arrives.
+   * Never reset on WS close — a kicked participant must still see the removed
+   * screen on subsequent reconnect attempts.
+   */
+  myStatus: 'pending' | 'approved' | 'kicked' | null;
+  /**
+   * Reflects the server's `room_locked` event. Drives the locked screen for new
+   * visitors who get HTTP 423 on POST /api/join (App.tsx sets joinLocked state).
+   * Already-connected browsers see the coordinator's lock toggle flip via this.
+   */
+  roomLocked: boolean;
 }
 
 export const initialState: UiState = {
@@ -65,6 +78,8 @@ export const initialState: UiState = {
   transportFailed: null,
   tunnelBanner: null,
   isCoordinator: false,
+  myStatus: null,
+  roomLocked: false,
 };
 
 function isServerEvent(frame: AnyFrame): frame is ServerEvent {
@@ -121,6 +136,8 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       session: p.session,
       me: p.you ?? null,
       isCoordinator: p.is_coordinator,
+      // Phase 4: set myStatus from welcome.you.status; do NOT clear if you is absent
+      ...(p.you !== undefined ? { myStatus: p.you.status } : {}),
       // Re-prime state but never move the watermark backward; Math.max keeps
       // the WR-07 guard intact against any subsequently-replayed already-
       // applied event (a backward `lastSeq` would re-open duplicate replay for
@@ -307,6 +324,28 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     };
   }
 
+  // Phase 4: participant_status_changed — update roster + own status
+  if (type === 'participant_status_changed') {
+    if (!state.session) return { ...state, lastSeq: seq };
+    const p = payload<{ participant_id: string; status: 'pending' | 'approved' | 'kicked' }>(evt);
+    const updatedParticipants = state.session.participants.map((x) =>
+      x.id === p.participant_id ? { ...x, status: p.status } : x,
+    );
+    const myStatus = state.me?.id === p.participant_id ? p.status : state.myStatus;
+    return {
+      ...state,
+      lastSeq: seq,
+      myStatus,
+      session: { ...state.session, participants: updatedParticipants },
+    };
+  }
+
+  // Phase 4: room_locked — update lock state
+  if (type === 'room_locked') {
+    const p = payload<{ locked: boolean }>(evt);
+    return { ...state, lastSeq: seq, roomLocked: p.locked };
+  }
+
   return { ...state, lastSeq: seq };
 }
 
@@ -317,6 +356,8 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
       session: evt.payload.session,
       me: evt.payload.you ?? null,
       isCoordinator: evt.payload.is_coordinator,
+      // Phase 4: set myStatus from welcome.you.status; do NOT clear if you is absent
+      ...(evt.payload.you !== undefined ? { myStatus: evt.payload.you.status } : {}),
       banner: null,
       // NOTE: do NOT update lastSeq — ephemeral welcome has no seq
     };

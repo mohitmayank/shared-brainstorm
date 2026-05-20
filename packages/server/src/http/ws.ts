@@ -119,8 +119,11 @@ export function createWsRouter({
       if (isCoordinator) return { kind: 'ok' };
       if (!cookieParticipantId) return { kind: 'reject', reason: 'not_joined' };
       const v = manager.sessionView();
-      if (!v.participants.find((p) => p.id === cookieParticipantId))
-        return { kind: 'reject', reason: 'not_joined' };
+      const p = v.participants.find((x) => x.id === cookieParticipantId);
+      if (!p) return { kind: 'reject', reason: 'not_joined' };
+      // Phase 4: kicked participants cannot reconnect — they see the removed screen
+      if (p.status === 'kicked') return { kind: 'reject', reason: 'removed' };
+      // pending participants are accepted (they see the waiting screen, WS is live)
       return { kind: 'ok' };
     },
 
@@ -178,6 +181,9 @@ export function createWsRouter({
             // Coordinator connections have no participant identity and cannot
             // author suggestions/comments over the WS (concern #6).
             if (!me) return;
+            // Phase 4: pending participants cannot post suggestions
+            const freshSug = manager.sessionView().participants.find((x) => x.id === me.id);
+            if (freshSug?.status !== 'approved') return;
             const sugArgs: Parameters<typeof manager.postSuggestion>[0] = {
               participant_id: me.id as Parameters<typeof manager.postSuggestion>[0]['participant_id'],
               question_id: c.question_id as Parameters<typeof manager.postSuggestion>[0]['question_id'],
@@ -189,6 +195,11 @@ export function createWsRouter({
           }
           case 'post_comment':
             if (!me) return;
+            // Phase 4: pending participants cannot post comments
+            {
+              const freshCmt = manager.sessionView().participants.find((x) => x.id === me.id);
+              if (freshCmt?.status !== 'approved') return;
+            }
             manager.postComment({
               participant_id: me.id as Parameters<typeof manager.postComment>[0]['participant_id'],
               question_id: c.question_id as Parameters<typeof manager.postComment>[0]['question_id'],

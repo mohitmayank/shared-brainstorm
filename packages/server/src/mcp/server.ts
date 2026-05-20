@@ -26,7 +26,7 @@ export const TOOLS = [
   {
     name: 'startSession',
     description:
-      'Start a new shared-brainstorm session. Returns session_id, public_url, join_code, invite_text (a pre-formatted message containing all three, ready to paste), and clipboard_copied (boolean — true if the invite was auto-copied to the OS clipboard). Show the invite_text to the user so they can paste it into Slack/email/etc.',
+      'Start a new shared-brainstorm session with an approval-gate flow. Returns session_id, public_url, invite_text (a pre-formatted message ready to paste), clipboard_copied (boolean — true if the invite was auto-copied to the OS clipboard), and coordinator_url (a one-time URL for the initiator to drive the session). Show the invite_text to the user so they can paste it into Slack/email/etc. Participants join as pending and must be approved by the coordinator.',
     inputSchema: {
       type: 'object' as const,
       properties: {

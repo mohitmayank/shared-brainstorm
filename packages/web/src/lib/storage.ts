@@ -1,5 +1,4 @@
 const DISPLAY_NAME_KEY = 'sb.display_name';
-const JOIN_CODE_KEY = 'sb.join_code';
 const LAST_SEQ_KEY = 'sb.last_seq';
 const THEME_KEY = 'sb.theme';
 
@@ -22,13 +21,6 @@ export function setName(name: string): void {
   localStorage.setItem(DISPLAY_NAME_KEY, name);
 }
 
-export function getJoinCode(): string | null {
-  return sessionStorage.getItem(JOIN_CODE_KEY);
-}
-
-export function setJoinCode(code: string): void {
-  sessionStorage.setItem(JOIN_CODE_KEY, code);
-}
 
 export function getLastSeq(): number {
   const v = sessionStorage.getItem(LAST_SEQ_KEY);

@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { ParticipantId } from '@shared-brainstorm/shared';
 import { SessionManager } from './SessionManager.js';
 import { fixedClock } from './clock.js';
-import { TranscriptV2, type ServerEvent } from '@shared-brainstorm/shared';
+import { TranscriptV2, type ServerEvent, type EphemeralFrame } from '@shared-brainstorm/shared';
 
 const makeMgr = () => {
   const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
@@ -18,6 +18,36 @@ const makeMgr = () => {
   return {
     mgr,
     events,
+    dir,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+};
+
+/**
+ * makeMgrWithEphemeral creates a manager where the broadcaster also captures
+ * EphemeralFrame objects alongside ServerEvent objects, enabling tests to assert
+ * on broadcastEphemeral() calls.
+ */
+const makeMgrWithEphemeral = () => {
+  const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
+  const events: ServerEvent[] = [];
+  const ephemeral: EphemeralFrame[] = [];
+  const mgr = new SessionManager({
+    clock: fixedClock('2026-04-29T12:00:00Z'),
+    broadcast: (e) => {
+      // Discriminate by presence of 'seq' — ServerEvent always has seq
+      if ('seq' in e) {
+        events.push(e as ServerEvent);
+      } else {
+        ephemeral.push(e as EphemeralFrame);
+      }
+    },
+    transcriptDir: dir,
+  });
+  return {
+    mgr,
+    events,
+    ephemeral,
     dir,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
@@ -676,6 +706,192 @@ describe('SessionManager', () => {
         expect(view.participants).toHaveLength(1);
         expect(view.participants[0]!.id).toBe(p.id);
         expect(view.participants[0]!.status).toBe('kicked');
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // session_status state machine + broadcastEphemeral (Phase 5 PRES-01)
+  // ---------------------------------------------------------------------------
+  describe('session_status state machine', () => {
+    it('Test 1: start() creates an active session with session_status === "waiting"', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const view = mgr.sessionView();
+        expect(view.session_status).toBe('waiting');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 2: askGroup() emits session_status_changed with status "question_open"', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.askGroup({ question: 'q?' });
+        const statusChanged = events.filter((e) => e.type === 'session_status_changed');
+        expect(statusChanged).toHaveLength(1);
+        if (statusChanged[0] && statusChanged[0].type === 'session_status_changed') {
+          const ev = statusChanged[0] as { type: string; payload: { status: string } };
+          expect(ev.payload.status).toBe('question_open');
+        }
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 3: recordAnswer() emits session_status_changed with status "waiting"', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.askGroup({ question: 'q?' });
+        const qid = mgr.currentQuestion()!.id;
+        mgr.recordAnswer({ question_id: qid, value: 'A', source: 'suggestion' });
+        const statusChangedEvents = events.filter((e) => e.type === 'session_status_changed');
+        // First is question_open, second is waiting (after recordAnswer)
+        const waitingEvt = statusChangedEvents.find((e) => {
+          if (e.type !== 'session_status_changed') return false;
+          const ev = e as { type: string; payload: { status: string } };
+          return ev.payload.status === 'waiting';
+        });
+        expect(waitingEvt).toBeDefined();
+        expect(mgr.sessionView().session_status).toBe('waiting');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 4: cancelCurrentQuestion() emits session_status_changed with status "waiting"', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.askGroup({ question: 'q?' });
+        mgr.cancelCurrentQuestion('host_cancelled');
+        const statusChanged = events.filter((e) => e.type === 'session_status_changed');
+        const waitingEvt = statusChanged.find((e) => {
+          if (e.type !== 'session_status_changed') return false;
+          const ev = e as { type: string; payload: { status: string } };
+          return ev.payload.status === 'waiting';
+        });
+        expect(waitingEvt).toBeDefined();
+        expect(mgr.sessionView().session_status).toBe('waiting');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 5: timeoutCurrentQuestion() emits session_status_changed with status "waiting"', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.askGroup({ question: 'q?' });
+        mgr.timeoutCurrentQuestion();
+        const statusChanged = events.filter((e) => e.type === 'session_status_changed');
+        const waitingEvt = statusChanged.find((e) => {
+          if (e.type !== 'session_status_changed') return false;
+          const ev = e as { type: string; payload: { status: string } };
+          return ev.payload.status === 'waiting';
+        });
+        expect(waitingEvt).toBeDefined();
+        expect(mgr.sessionView().session_status).toBe('waiting');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 6: stop() emits session_status_changed with status "done"', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.stop('stop_session');
+        const doneEvt = events.find((e) => {
+          if (e.type !== 'session_status_changed') return false;
+          const ev = e as { type: string; payload: { status: string } };
+          return ev.payload.status === 'done';
+        });
+        expect(doneEvt).toBeDefined();
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 7: setSessionStatus() is idempotent — calling setSessionStatus("waiting") when already "waiting" does NOT emit a second session_status_changed event', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        // Status is already 'waiting' after start(); calling it again should no-op
+        mgr.setSessionStatus('waiting');
+        const statusChanged = events.filter((e) => e.type === 'session_status_changed');
+        expect(statusChanged).toHaveLength(0);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 8: sessionView() returns { session_status: "question_open" } after askGroup()', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.askGroup({ question: 'q?' });
+        expect(mgr.sessionView().session_status).toBe('question_open');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 9 (CRITICAL RingBuffer invariant): broadcastEphemeral does NOT push to RingBuffer', () => {
+      const { mgr, cleanup } = makeMgrWithEphemeral();
+      try {
+        mgr.start({ brief: 'a' });
+        const beforeLen = mgr.replay(-1).length;
+        mgr.broadcastEphemeral({ type: 'heartbeat' });
+        const afterLen = mgr.replay(-1).length;
+        expect(afterLen).toBe(beforeLen);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 10: after broadcastEphemeral(), the broadcaster spy was called exactly once with the frame passed in', () => {
+      const { mgr, ephemeral, cleanup } = makeMgrWithEphemeral();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.broadcastEphemeral({ type: 'heartbeat' });
+        expect(ephemeral).toHaveLength(1);
+        expect(ephemeral[0]).toEqual({ type: 'heartbeat' });
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 11: choosing status transition — setSessionStatus("choosing") emits session_status_changed with status "choosing", sessionView() returns "choosing"', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        mgr.askGroup({ question: 'q?' });
+        mgr.setSessionStatus('choosing');
+        const choosingEvt = events.find((e) => {
+          if (e.type !== 'session_status_changed') return false;
+          const ev = e as { type: string; payload: { status: string } };
+          return ev.payload.status === 'choosing';
+        });
+        expect(choosingEvt).toBeDefined();
+        expect(mgr.sessionView().session_status).toBe('choosing');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('Test 12: sessionView() result contains session_status (welcome payload chain — ws.ts assembles welcome from sessionView())', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'a' });
+        const view = mgr.sessionView();
+        expect('session_status' in view).toBe(true);
+        expect(view.session_status).toBe('waiting');
       } finally {
         cleanup();
       }

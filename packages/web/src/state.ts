@@ -417,12 +417,11 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
     const { actor_kind, actor_id, activity } = evt.payload;
     const key = actor_id ?? (actor_kind === 'coordinator' ? '__coordinator' : '__unknown');
     if (activity === 'idle') {
-      // WR-01 fix: only clear a *typing* indicator — never wipe a derived 'submitted'
-      // entry whose TTL is still live. The trailing 'typing stop' idle frame sent on
-      // submit (QuestionCard.tsx:59) must not race-delete the 'submitted' presence entry
-      // that was just set by the durable suggestion_added event. Submitting is terminal:
-      // if the current entry is 'submitted', the typing phase is already over.
-      if (state.presence[key]?.activity !== 'typing') return state;
+      // WR-01 fix: protect only the derived 'submitted' entry — never wipe it on an
+      // idle/stop frame. Both 'typing' AND 'picking' (coordinator) are clearable by an
+      // idle frame; 'submitted' is the only sticky state and must survive the trailing
+      // 'typing stop' frame that QuestionCard.tsx:59 sends immediately after submission.
+      if (state.presence[key]?.activity === 'submitted') return state;
       const next = { ...state.presence };
       delete next[key];
       return { ...state, presence: next };

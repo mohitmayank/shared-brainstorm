@@ -260,17 +260,19 @@ export function App() {
               }, 4000),
             );
           } else {
-            // WR-01 fix (App.tsx mirror): only cancel the TTL timer if the current
-            // presence entry is 'typing'. If the entry was promoted to 'submitted'
-            // (by a durable suggestion_added/updated event that set a 6s timer),
-            // the 'idle' frame must NOT cancel that longer-lived submitted timer.
+            // idle frame: clear the per-key timer unconditionally. The reducer is the
+            // single source of truth for presence membership — it now guards 'submitted'
+            // entries from being wiped (state.ts applyEphemeralFrame idle branch). The
+            // 6s submitted timer was already installed by the suggestion_added branch
+            // below (and replaced the 4s typing timer at that point); on idle we only
+            // need to cancel the residual 4s typing/picking timer. Reading state.presence
+            // here would see stale closure data (startWs is useCallback([]) and captures
+            // state from the first render only), so we do not consult it.
             const key = presenceFrame.payload.actor_id ?? '__coordinator';
-            if (state.presence[key]?.activity !== 'submitted') {
-              const existing = presenceTimers.current.get(key);
-              if (existing !== undefined) {
-                clearTimeout(existing);
-                presenceTimers.current.delete(key);
-              }
+            const existing = presenceTimers.current.get(key);
+            if (existing !== undefined) {
+              clearTimeout(existing);
+              presenceTimers.current.delete(key);
             }
           }
         }

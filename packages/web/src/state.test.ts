@@ -990,4 +990,55 @@ describe('reduce — presence EphemeralFrame branch (PRES-02)', () => {
     const afterStop = reduce(afterStart, typingStopFrame);
     expect(afterStop.presence['sb_p_002']).toBeUndefined();
   });
+
+  // Test 9: picking-start → picking-stop (idle) clears the coordinator presence entry
+  // Regression guard for the secondary issue in WR-01: the prior guard (`!== 'typing'`)
+  // left 'picking' entries stranded because idle was a no-op for any non-'typing' entry.
+  // The fix (`=== 'submitted'`) means idle clears 'typing' AND 'picking', only sparing 'submitted'.
+  it('picking-start → picking-stop (idle) clears the coordinator __coordinator presence entry', () => {
+    // actor_id omitted for coordinator (exactOptionalPropertyTypes: field must be absent, not undefined)
+    const pickingStartFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: { actor_kind: 'coordinator', activity: 'picking' },
+    };
+    const afterStart = reduce(initialState, pickingStartFrame);
+    expect(afterStart.presence['__coordinator']?.activity).toBe('picking');
+
+    const pickingStopFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: { actor_kind: 'coordinator', activity: 'idle' },
+    };
+    const afterStop = reduce(afterStart, pickingStopFrame);
+    expect(afterStop.presence['__coordinator']).toBeUndefined();
+  });
+
+  // Test 10: submitted → idle keeps 'submitted'; picking → idle clears 'picking' (combined guard)
+  it('idle clears picking but not submitted — both guards active simultaneously', () => {
+    // Seed two presence entries: one picking (coordinator) and one submitted (participant)
+    const stateWith2 = {
+      ...initialState,
+      presence: {
+        '__coordinator': { activity: 'picking', expiresAt: Date.now() + 4000 },
+        'sb_p_001': { activity: 'submitted', expiresAt: Date.now() + 6000 },
+      },
+    };
+
+    // Coordinator idle frame (actor_id omitted) — clears 'picking', must NOT touch 'submitted'
+    const coordIdleFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: { actor_kind: 'coordinator', activity: 'idle' },
+    };
+    const afterCoordStop = reduce(stateWith2, coordIdleFrame);
+    expect(afterCoordStop.presence['__coordinator']).toBeUndefined();
+    expect(afterCoordStop.presence['sb_p_001']?.activity).toBe('submitted');
+
+    // Participant idle frame for submitted entry — must be a no-op (submitted is sticky)
+    const participantIdleFrame: EphemeralFrame = {
+      type: 'presence',
+      payload: { actor_kind: 'participant', actor_id: 'sb_p_001', activity: 'idle' },
+    };
+    const afterParticipantStop = reduce(afterCoordStop, participantIdleFrame);
+    expect(afterParticipantStop.presence['sb_p_001']?.activity).toBe('submitted');
+    expect(Object.keys(afterParticipantStop.presence)).toHaveLength(1);
+  });
 });

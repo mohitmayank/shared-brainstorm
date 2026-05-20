@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ParticipantId } from '@shared-brainstorm/shared';
+import type { ParticipantId, QuestionId } from '@shared-brainstorm/shared';
 import { SessionManager } from './SessionManager.js';
 import { fixedClock } from './clock.js';
 import { TranscriptV2, type ServerEvent, type EphemeralFrame } from '@shared-brainstorm/shared';
@@ -170,7 +170,7 @@ describe('SessionManager', () => {
       mgr.recordAnswer({ question_id: qid, value: 'A', source: 'suggestion' });
       expect(() =>
         mgr.recordAnswer({ question_id: qid, value: 'B', source: 'suggestion' }),
-      ).toThrow(/no matching current question/);
+      ).toThrow(/no open question with id/);
       // ticket should still be resolved from the first call
       expect(t.ticket_id).toMatch(/^sb_t_/);
     } finally {
@@ -1026,6 +1026,212 @@ describe('SessionManager', () => {
         mgr.postSuggestion({ participant_id: p.id, question_id: q.id, value: 'use X' });
         mgr.postComment({ participant_id: p.id, question_id: q.id, text: 'thoughts' });
         expect(mgr.replay(-1).every((e) => !JSON.stringify(e).includes(token))).toBe(true);
+      } finally {
+        cleanup();
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Phase 6: batch questions (BATCH-01 / BATCH-02)
+  // ---------------------------------------------------------------------------
+  describe('Phase 6: batch questions (BATCH-01 / BATCH-02)', () => {
+    it('askGroup(single) returns {ticket_id: string} — no question_id field (byte-identical back-compat)', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const result = mgr.askGroup({ question: 'Q1?' });
+        expect(result.ticket_id).toMatch(/^sb_t_/);
+        expect((result as Record<string, unknown>)['question_id']).toBeUndefined();
+        expect((result as Record<string, unknown>)['tickets']).toBeUndefined();
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('askGroupBatch([Q1, Q2]) returns {tickets:[{question_id, ticket_id}, ...]} with both questions in open_questions', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const result = mgr.askGroupBatch([
+          { question: 'Q1?' },
+          { question: 'Q2?' },
+        ]);
+        expect(result.tickets).toHaveLength(2);
+        expect(result.tickets[0]!.question_id).toMatch(/^sb_q_/);
+        expect(result.tickets[0]!.ticket_id).toMatch(/^sb_t_/);
+        expect(result.tickets[1]!.question_id).toMatch(/^sb_q_/);
+        expect(result.tickets[1]!.ticket_id).toMatch(/^sb_t_/);
+        // Both question_ids should be distinct
+        expect(result.tickets[0]!.question_id).not.toBe(result.tickets[1]!.question_id);
+        // sessionView should have both open
+        expect(mgr.sessionView().questions).toHaveLength(2);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('askGroupBatch preserves askGroup submission order in sessionView().questions[]', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const result = mgr.askGroupBatch([
+          { question: 'First?' },
+          { question: 'Second?' },
+        ]);
+        const questions = mgr.sessionView().questions;
+        expect(questions[0]!.text).toBe('First?');
+        expect(questions[1]!.text).toBe('Second?');
+        // Confirm order matches returned tickets array
+        expect(questions[0]!.ticket_id).toBe(result.tickets[0]!.ticket_id);
+        expect(questions[1]!.ticket_id).toBe(result.tickets[1]!.ticket_id);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('postSuggestion routes to Q2 by question_id when both Q1 and Q2 are open; Q1.suggestions unaffected', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const p = mgr.addParticipant({ display_name: 'Alice' });
+        mgr.approveParticipant(p.id as ParticipantId);
+        const result = mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const q2id = result.tickets[1]!.question_id;
+        const questions = mgr.sessionView().questions;
+        const q1 = questions[0]!;
+        const q2 = questions.find((q) => q.id === q2id)!;
+        mgr.postSuggestion({ participant_id: p.id, question_id: q2.id, value: 'ans-q2' });
+        expect(q2.suggestions).toHaveLength(1);
+        expect(q2.suggestions[0]!.value).toBe('ans-q2');
+        expect(q1.suggestions).toHaveLength(0);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('recordAnswer on Q2 resolves Q2 ticket; Q1 ticket remains pending; open_questions still has Q1', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const result = mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const q1Entry = result.tickets[0]!;
+        const q2Entry = result.tickets[1]!;
+        mgr.recordAnswer({ question_id: q2Entry.question_id as QuestionId, value: 'A2', source: 'override' });
+        // Q1 should still be open
+        const view = mgr.sessionView();
+        expect(view.questions).toHaveLength(1);
+        expect(view.questions[0]!.ticket_id).toBe(q1Entry.ticket_id);
+        // Q1's question must still be broadcast (not resolved)
+        expect(view.questions[0]!.status).toBe('broadcast');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('session_status stays question_open after recording Q2 answer while Q1 is still open', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const result = mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const q2Entry = result.tickets[1]!;
+        mgr.recordAnswer({ question_id: q2Entry.question_id as QuestionId, value: 'A2', source: 'override' });
+        expect(mgr.sessionView().session_status).toBe('question_open');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('session_status becomes waiting after recordAnswer resolves the last open question', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const result = mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const q1Entry = result.tickets[0]!;
+        const q2Entry = result.tickets[1]!;
+        mgr.recordAnswer({ question_id: q2Entry.question_id as QuestionId, value: 'A2', source: 'override' });
+        mgr.recordAnswer({ question_id: q1Entry.question_id as QuestionId, value: 'A1', source: 'override' });
+        expect(mgr.sessionView().session_status).toBe('waiting');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('sessionView().questions returns [Q1, Q2] in submission order (both open)', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const questions = mgr.sessionView().questions;
+        expect(questions).toHaveLength(2);
+        expect(questions[0]!.text).toBe('Q1?');
+        expect(questions[1]!.text).toBe('Q2?');
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('sessionView().current_question equals questions[0] (back-compat derived field)', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const view = mgr.sessionView();
+        expect(view.current_question).not.toBeNull();
+        expect(view.current_question!.id).toBe(view.questions[0]!.id);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('sessionView().current_question is null when open_questions is empty', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const view = mgr.sessionView();
+        expect(view.current_question).toBeNull();
+        expect(view.questions).toHaveLength(0);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('cancelAllOpenQuestions cancels all open questions; emits question_cancelled per question; open_questions is empty afterward', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        mgr.cancelAllOpenQuestions('host_cancelled');
+        const cancelled = events.filter((e) => e.type === 'question_cancelled');
+        expect(cancelled).toHaveLength(2);
+        expect(mgr.sessionView().questions).toHaveLength(0);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('stop() calls cancelAllOpenQuestions — all open tickets are cancelled', () => {
+      const { mgr, events, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        mgr.stop('stop_session');
+        const cancelled = events.filter((e) => e.type === 'question_cancelled');
+        expect(cancelled).toHaveLength(2);
+      } finally {
+        cleanup();
+      }
+    });
+
+    it('snapshot() finds a question in open_questions (not just terminal questions)', () => {
+      const { mgr, cleanup } = makeMgr();
+      try {
+        mgr.start({ brief: 'batch' });
+        const result = mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+        const q1Entry = result.tickets[0]!;
+        const snap = mgr.snapshot(q1Entry.question_id as QuestionId, false);
+        expect(snap.suggestions).toHaveLength(0);
+        expect(snap.resolved).toBe(false);
       } finally {
         cleanup();
       }

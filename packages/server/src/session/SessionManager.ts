@@ -72,7 +72,11 @@ interface ActiveSession {
   session_status: SessionStatus;
   participants: Map<ParticipantId, Participant>;
   decisions: { question: string; answer: string; question_id: QuestionId }[];
-  current_question: Question | null;
+  /**
+   * Phase 6 (BATCH-02): replaces current_question scalar. Holds N concurrently
+   * open questions in insertion order (Map preserves insertion order in V8).
+   */
+  open_questions: Map<QuestionId, Question>;
   ticket_to_question: Map<string, QuestionId>;
 }
 
@@ -109,7 +113,7 @@ export class SessionManager {
       session_status: 'waiting',
       participants: new Map(),
       decisions: [],
-      current_question: null,
+      open_questions: new Map<QuestionId, Question>(),
       ticket_to_question: new Map(),
     };
     return { session_id };
@@ -175,11 +179,29 @@ export class SessionManager {
       comments: [],
       resolution: null,
     };
-    a.current_question = q;
+    a.open_questions.set(q.id, q); // Phase 6: replaced a.current_question = q
     a.ticket_to_question.set(ticket.id, q.id);
     this.emit({ type: 'question_broadcast', payload: { question: q } });
-    this.setSessionStatus('question_open');
+    this.setSessionStatus(this.deriveSessionStatus()); // Phase 6: replaced hardcoded 'question_open'
     return { ticket_id: ticket.id };
+  }
+
+  /**
+   * Phase 6 (BATCH-01): post multiple questions concurrently. Reuses the
+   * single-question askGroup() path per item so all invariants are preserved.
+   * The setSessionStatus idempotency guard in askGroup() suppresses redundant
+   * session_status_changed events after the first question_open transition.
+   */
+  askGroupBatch(inputs: AskGroupInput[]): { tickets: { question_id: string; ticket_id: string }[] } {
+    const tickets = inputs.map((input) => {
+      const { ticket_id } = this.askGroup(input);
+      const a = this.requireActive();
+      // ticket_to_question was set synchronously inside askGroup() above;
+      // non-null assertion is safe (single-threaded event loop).
+      const question_id = a.ticket_to_question.get(ticket_id)!;
+      return { question_id, ticket_id };
+    });
+    return { tickets };
   }
 
   postSuggestion(args: {
@@ -189,8 +211,8 @@ export class SessionManager {
     rationale?: string;
   }): void {
     const a = this.requireActive();
-    const q = a.current_question;
-    if (!q || q.id !== args.question_id || q.status !== 'broadcast') return;
+    const q = a.open_questions.get(args.question_id); // Phase 6: replaced current_question scalar guard
+    if (!q || q.status !== 'broadcast') return;
     if (!a.participants.has(args.participant_id)) return;
     const existing = q.suggestions.find((s) => s.participant_id === args.participant_id);
     if (existing) {
@@ -243,8 +265,8 @@ export class SessionManager {
     text: string;
   }): void {
     const a = this.requireActive();
-    const q = a.current_question;
-    if (!q || q.id !== args.question_id) return;
+    const q = a.open_questions.get(args.question_id); // Phase 6: replaced current_question scalar guard
+    if (!q) return;
     if (!a.participants.has(args.participant_id)) return;
     // REL-07 / D-07: total comments per question cap. Throw BEFORE push() +
     // emit() so cap rejections never enter the RingBuffer / transcript.
@@ -278,9 +300,9 @@ export class SessionManager {
     source: AnswerSource;
   }): void {
     const a = this.requireActive();
-    const q = a.current_question;
-    if (!q || q.id !== args.question_id) {
-      throw new Error('record_answer: no matching current question');
+    const q = a.open_questions.get(args.question_id); // Phase 6: replaced current_question scalar guard
+    if (!q) {
+      throw new Error(`record_answer: no open question with id ${args.question_id}`);
     }
     if (q.status !== 'broadcast') {
       throw new Error(`record_answer: question is not broadcast (status=${q.status})`);
@@ -295,35 +317,48 @@ export class SessionManager {
       type: 'question_resolved',
       payload: { question_id: q.id, resolution: q.resolution },
     });
-    a.current_question = null;
-    this.setSessionStatus('waiting');
+    a.open_questions.delete(args.question_id); // Phase 6: replaced a.current_question = null
+    this.setSessionStatus(this.deriveSessionStatus()); // Phase 6: derives based on remaining open questions
   }
 
-  cancelCurrentQuestion(reason: string): void {
+  /**
+   * Phase 6 (BATCH-02): renamed from cancelCurrentQuestion; iterates all
+   * concurrently open questions and cancels each one. Emits question_cancelled
+   * per question, then derives the new session status from the (now empty) map.
+   */
+  cancelAllOpenQuestions(reason: string): void {
     const a = this.requireActive();
-    const q = a.current_question;
-    if (!q) return;
-    q.status = 'cancelled';
-    this.tickets.cancel(q.ticket_id);
-    this.terminalQuestions.push(q);
-    this.emit({ type: 'question_cancelled', payload: { question_id: q.id, reason } });
-    a.current_question = null;
-    this.setSessionStatus('waiting');
+    for (const q of a.open_questions.values()) {
+      q.status = 'cancelled';
+      this.tickets.cancel(q.ticket_id);
+      this.terminalQuestions.push(q);
+      this.emit({ type: 'question_cancelled', payload: { question_id: q.id, reason } });
+    }
+    a.open_questions.clear();
+    this.setSessionStatus(this.deriveSessionStatus()); // → 'waiting' when map is empty
+  }
+
+  /**
+   * @deprecated Phase 6: use cancelAllOpenQuestions(). Retained for back-compat
+   * with existing call sites until they are migrated.
+   */
+  cancelCurrentQuestion(reason: string): void {
+    this.cancelAllOpenQuestions(reason);
   }
 
   timeoutCurrentQuestion(): void {
     const a = this.requireActive();
-    const q = a.current_question;
-    if (!q) return;
-    q.status = 'timeout';
-    this.tickets.timeout(q.ticket_id);
-    this.terminalQuestions.push(q);
-    this.emit({
-      type: 'question_cancelled',
-      payload: { question_id: q.id, reason: 'timeout' },
-    });
-    a.current_question = null;
-    this.setSessionStatus('waiting');
+    for (const q of a.open_questions.values()) {
+      q.status = 'timeout';
+      this.tickets.timeout(q.ticket_id);
+      this.terminalQuestions.push(q);
+      this.emit({
+        type: 'question_cancelled',
+        payload: { question_id: q.id, reason: 'timeout' },
+      });
+    }
+    a.open_questions.clear();
+    this.setSessionStatus(this.deriveSessionStatus());
   }
 
   /**
@@ -347,9 +382,8 @@ export class SessionManager {
   snapshot(questionId: QuestionId, resolved: boolean): AwaitAnswerOutput {
     const a = this.requireActive();
     const q =
-      a.current_question?.id === questionId
-        ? a.current_question
-        : this.terminalQuestions.find((t) => t.id === questionId);
+      a.open_questions.get(questionId) ?? // Phase 6: check open_questions map first
+      this.terminalQuestions.find((t) => t.id === questionId);
     if (!q) return { suggestions: [], comments: [], resolved };
     const nameFor = (pid: ParticipantId): string =>
       a.participants.get(pid)?.display_name ?? 'unknown';
@@ -369,8 +403,9 @@ export class SessionManager {
     };
   }
 
+  /** Phase 6 back-compat: returns first open question or null. */
   currentQuestion(): Question | null {
-    return this.active?.current_question ?? null;
+    return [...(this.active?.open_questions.values() ?? [])][0] ?? null;
   }
 
   approveParticipant(id: ParticipantId): void {
@@ -405,6 +440,19 @@ export class SessionManager {
   }
 
   /**
+   * Phase 6 (BATCH-02): derive the aggregate session status from the current
+   * open_questions map. Preserves terminal states (done, choosing) and derives
+   * question_open / waiting from the map size.
+   */
+  private deriveSessionStatus(): SessionStatus {
+    const a = this.requireActive();
+    if (a.session_status === 'done') return 'done'; // terminal — cannot regress
+    if (a.session_status === 'choosing') return 'choosing'; // externally-set only
+    if (a.open_questions.size > 0) return 'question_open';
+    return 'waiting';
+  }
+
+  /**
    * Idempotent session status transition. Emits session_status_changed only
    * when the status actually changes. Called by internal lifecycle methods and
    * by ws.ts (coordinator picking handler) for the 'choosing' transition.
@@ -426,12 +474,14 @@ export class SessionManager {
 
   sessionView(): SessionView {
     const a = this.requireActive();
+    const questions = [...a.open_questions.values()]; // Phase 6: spread Map to array in insertion order
     return {
       session_id: a.id,
       brief: a.brief,
       participants: [...a.participants.values()],
       decisions: a.decisions,
-      current_question: a.current_question,
+      questions, // Phase 6 (BATCH-02): all currently-open questions
+      current_question: questions[0] ?? null, // Phase 6: derived back-compat field
       locked: a.locked,
       session_status: a.session_status,
     };
@@ -454,7 +504,7 @@ export class SessionManager {
   ): { ok: true; transcript_path: string } {
     const a = this.requireActive();
     const ended_at = this.opts.clock.isoNow();
-    if (a.current_question) this.cancelCurrentQuestion(`session_ended:${reason}`);
+    if (a.open_questions.size > 0) this.cancelAllOpenQuestions(`session_ended:${reason}`);
     this.setSessionStatus('done');
     this.emit({ type: 'session_ended', payload: { reason } });
 

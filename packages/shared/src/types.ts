@@ -49,7 +49,9 @@ export interface SessionView {
   brief: string;
   participants: Participant[];
   decisions: { question: string; answer: string; question_id: QuestionId }[];
-  current_question: Question | null;
+  // Phase 6 (BATCH-02): all currently-open questions in askGroup submission order.
+  questions: Question[];
+  current_question: Question | null; // derived back-compat = questions[0] ?? null
   locked: boolean;
   session_status: SessionStatus;
 }

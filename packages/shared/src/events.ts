@@ -53,7 +53,8 @@ const SessionViewSchema = z.object({
   decisions: z.array(
     z.object({ question: z.string(), answer: z.string(), question_id: z.string() }),
   ),
-  current_question: QuestionSchema.nullable(),
+  questions: z.array(QuestionSchema), // Phase 6 (BATCH-02): all open questions (required, not optional)
+  current_question: QuestionSchema.nullable(), // retained back-compat = questions[0] ?? null
   locked: z.boolean(),
   session_status: z.enum(['waiting', 'question_open', 'choosing', 'done']),
 });

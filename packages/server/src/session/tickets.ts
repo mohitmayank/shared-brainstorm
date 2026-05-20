@@ -32,11 +32,7 @@ export class TicketStore {
   }
 
   create(): Ticket {
-    if (this.hasOpen()) {
-      const e = new Error('BUSY: a question is already in flight');
-      (e as Error & { code: string }).code = 'BUSY';
-      throw e;
-    }
+    // Phase 6 (BATCH-02): N concurrent pending tickets allowed — gate removed.
     const t: Ticket = {
       id: newTicketId(),
       status: 'pending',

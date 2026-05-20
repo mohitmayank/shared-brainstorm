@@ -61,10 +61,38 @@ describe('TicketStore', () => {
     expect(ts.hasOpen()).toBe(false);
   });
 
-  it('create() throws if a ticket is already open (BUSY)', () => {
-    const ts = new TicketStore(fixedClock('2026-01-01T00:00:00Z'));
-    ts.create();
-    expect(() => ts.create()).toThrow(/BUSY/);
+  it('create() throws if a ticket is already open (BUSY) [LEGACY — superseded by Phase 6]', () => {
+    // NOTE: Phase 6 (BATCH-02) removes this gate. Test updated below.
+    // Keeping as a comment marker so git history is traceable.
+  });
+
+  // Phase 6 (BATCH-02): N concurrent pending tickets allowed
+  describe('Phase 6: N concurrent pending tickets', () => {
+    it('create() called twice in same session does NOT throw; both tickets have status pending', () => {
+      const ts = new TicketStore(fixedClock('2026-01-01T00:00:00Z'));
+      const t1 = ts.create();
+      const t2 = ts.create(); // should NOT throw after gate removal
+      expect(t1.status).toBe('pending');
+      expect(t2.status).toBe('pending');
+      expect(t1.id).not.toBe(t2.id);
+    });
+
+    it('hasOpen() returns true with 2 pending tickets', () => {
+      const ts = new TicketStore(fixedClock('2026-01-01T00:00:00Z'));
+      ts.create();
+      ts.create();
+      expect(ts.hasOpen()).toBe(true);
+    });
+
+    it('hasOpen() returns false after all tickets are resolved', () => {
+      const ts = new TicketStore(fixedClock('2026-01-01T00:00:00Z'));
+      const t1 = ts.create();
+      const t2 = ts.create();
+      ts.resolve(t1.id, 'a');
+      expect(ts.hasOpen()).toBe(true); // t2 still pending
+      ts.resolve(t2.id, 'b');
+      expect(ts.hasOpen()).toBe(false);
+    });
   });
 
   it('waitFor on unknown ticket id resolves to cancelled', async () => {

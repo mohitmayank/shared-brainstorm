@@ -155,6 +155,10 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       // participant sees the correct lock state immediately without waiting for a
       // room_locked event that may have aged out of the ring buffer.
       roomLocked: p.session.locked,
+      // WR-03 fix: project session_status in BOTH welcome paths (durable + ephemeral)
+      // so a reconnect that replays a seq-carrying welcome (schema-permitted shape)
+      // also restores the correct status. Mirrors the ephemeral handler at line ~404.
+      sessionStatus: p.session.session_status,
       // Re-prime state but never move the watermark backward; Math.max keeps
       // the WR-07 guard intact against any subsequently-replayed already-
       // applied event (a backward `lastSeq` would re-open duplicate replay for

@@ -695,6 +695,44 @@ describe('reduce — sessionStatus (Phase 5 / PRES-01)', () => {
     expect(next.lastSeq).toBe(-1); // ephemeral — no seq advancement
   });
 
+  // Test 5b: WR-03 — seq-carrying (durable) welcome also projects session_status
+  it('WR-03: seq-carrying welcome (durable ServerEvent form) projects session_status (not stuck at prior value)', () => {
+    // Start with sessionStatus='choosing' (e.g. from a prior session_status_changed)
+    const chosingEvt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:05Z',
+      type: 'session_status_changed',
+      payload: { status: 'choosing' as const },
+    } as unknown as AnyFrame;
+    const withChoosing = reduce(initialState, chosingEvt);
+    expect(withChoosing.sessionStatus).toBe('choosing');
+
+    // Reconnect delivers a seq-carrying welcome with session_status='question_open'
+    const durableWelcome: AnyFrame = {
+      seq: 6,
+      ts: '2026-01-01T00:00:06Z',
+      type: 'welcome',
+      payload: {
+        session: {
+          session_id: 'sb_s_001',
+          brief: 'test session',
+          participants: [],
+          decisions: [],
+          current_question: null,
+          locked: false,
+          session_status: 'question_open' as const,
+        },
+        you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
+        is_coordinator: false,
+      },
+    };
+    const next = reduce(withChoosing, durableWelcome);
+    // WR-03 fix: sessionStatus must be updated from the welcome payload, not stuck at 'choosing'
+    expect(next.sessionStatus).toBe('question_open');
+    // lastSeq advances (it is a durable/seq-carrying event)
+    expect(next.lastSeq).toBe(6);
+  });
+
   // Test 6: WR-07 guard — session_status_changed with seq <= lastSeq is dropped
   it('WR-07: session_status_changed with seq <= lastSeq is dropped (state unchanged)', () => {
     const baseState = reduce(initialState, welcomeEphemeral);

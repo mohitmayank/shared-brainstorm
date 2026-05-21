@@ -14,8 +14,9 @@ describe('MCP tool definitions', () => {
     expect(tool!.description).toMatch(/redaction/i);
   });
 
-  it('all five tools are still listed (regression)', () => {
+  it('all six tools are listed (regression — includes answerClarification added in Plan 07-01)', () => {
     expect(TOOLS.map((t) => t.name).sort()).toEqual([
+      'answerClarification', // CHATAI-01: 6th tool added in Phase 7 Plan 01
       'askGroup',
       'awaitAnswer',
       'recordAnswer',

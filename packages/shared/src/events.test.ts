@@ -10,6 +10,7 @@ const sessionShape = {
   current_question: null,
   locked: false,
   session_status: 'waiting' as const,
+  chat: [], // CHATAI-01: required field
 };
 const youShape = { id: 'sb_p_x', display_name: 'Alice', joined_at: 'x', status: 'pending' as const };
 
@@ -38,6 +39,7 @@ describe('WS events', () => {
           status: 'broadcast',
           suggestions: [],
           comments: [],
+          clarifications: [], // CHATAI-01: required field
           resolution: null,
         },
       },

@@ -347,3 +347,28 @@ ul.suggestions li, ul.comments li {
 .batch-question-list {
   display: contents;
 }
+
+/* ----- Phase 7 (CHATAI-01): Clarification thread ----------------------- */
+.clarify-thread {
+  margin-top: .75rem;
+}
+
+.clarify-list {
+  list-style: none;
+  margin: .5rem 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+
+.clarify-pending {
+  display: block;
+  margin-top: .15rem;
+  font-size: .875rem;
+}
+
+.clarify-readonly-note {
+  font-size: .875rem;
+  margin-bottom: .25rem;
+}

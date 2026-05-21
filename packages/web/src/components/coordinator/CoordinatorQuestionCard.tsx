@@ -144,6 +144,42 @@ export function CoordinatorQuestionCard({
         </>
       )}
 
+      {/* CHATAI-01 / CHATAI-02: read-only clarification thread.
+          Clarifications are a SEPARATE array — NEVER mixed into the suggestion
+          radiogroup above. The coordinator sees them as context only. */}
+      {question.clarifications.length > 0 && (
+        <div className="clarify-thread" data-testid={`clarify-thread-${question.id}`}>
+          <h3>Ask the AI</h3>
+          <p
+            className="muted clarify-readonly-note"
+            data-testid="clarify-readonly-note"
+          >
+            Read-only — clarifications don't affect the final answer.
+          </p>
+          <ul className="clarify-list">
+            {question.clarifications.map((cl) => (
+              <li key={cl.id}>
+                <strong>{participantName(cl.participant_id)}</strong>: {cl.text}
+                {cl.answer !== undefined ? (
+                  <div>
+                    <span aria-hidden="true">🤖</span> AI: {cl.answer}
+                  </div>
+                ) : (
+                  <span
+                    className="muted clarify-pending"
+                    data-testid={`clarify-pending-${cl.id}`}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <span className="presence-typing-dot" aria-hidden="true" /> Waiting for the AI…
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {!isResolved && (
         <>
           <h3>Pick the final answer</h3>

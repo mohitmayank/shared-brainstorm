@@ -9,13 +9,15 @@ interface Props {
   participants: WireParticipant[];
   /** Phase 5 (PRES-02): debounced typing notification callback — wired to WS in Plan 03. */
   onTyping?: (questionId: string, state: 'start' | 'stop') => void;
+  /** CHATAI-01: sends a post_clarification WS command. Omit to hide the Ask form. */
+  onAsk?: (questionId: string, text: string) => void;
 }
 
 function nameFor(participants: WireParticipant[], id: string): string {
   return participants.find((p) => p.id === id)?.display_name ?? id;
 }
 
-export function QuestionCard({ question, me, participants, onTyping }: Props) {
+export function QuestionCard({ question, me, participants, onTyping, onAsk }: Props) {
   const mySuggestion = question.suggestions.find((s) => s.participant_id === me.id);
   const hasOptions = !!(question.options && question.options.length > 0);
 
@@ -23,6 +25,7 @@ export function QuestionCard({ question, me, participants, onTyping }: Props) {
   const [sugValue, setSugValue] = useState(mySuggestion?.value ?? '');
   const [sugRationale, setSugRationale] = useState(mySuggestion?.rationale ?? '');
   const [commentText, setCommentText] = useState('');
+  const [clarifyText, setClarifyText] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -92,6 +95,14 @@ export function QuestionCard({ question, me, participants, onTyping }: Props) {
     } finally {
       setBusy(false);
     }
+  }
+
+  function handleAsk(e: FormEvent) {
+    e.preventDefault();
+    const trimmed = clarifyText.trim();
+    if (!trimmed || !onAsk) return;
+    onAsk(question.id, trimmed);
+    setClarifyText('');
   }
 
   function startEdit() {
@@ -259,6 +270,57 @@ export function QuestionCard({ question, me, participants, onTyping }: Props) {
           </div>
         </form>
       )}
+
+      {/* CHATAI-01: clarification thread */}
+      <div className="clarify-thread" data-testid={`clarify-thread-${question.id}`}>
+        {question.clarifications.length > 0 && (
+          <>
+            <h3>Ask the AI</h3>
+            <ul className="clarify-list">
+              {question.clarifications.map((cl) => (
+                <li key={cl.id}>
+                  <strong>{nameFor(participants, cl.participant_id)}</strong>: {cl.text}
+                  {cl.answer !== undefined ? (
+                    <div>
+                      <span aria-hidden="true">🤖</span> AI: {cl.answer}
+                    </div>
+                  ) : (
+                    <span
+                      className="muted clarify-pending"
+                      data-testid={`clarify-pending-${cl.id}`}
+                      role="status"
+                      aria-live="polite"
+                    >
+                      <span className="presence-typing-dot" aria-hidden="true" /> Waiting for the AI…
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+        {canInput && onAsk && (
+          <form onSubmit={handleAsk}>
+            <div className="row">
+              <input
+                type="text"
+                placeholder="Ask the AI a question about this…"
+                value={clarifyText}
+                onChange={(e) => setClarifyText(e.target.value)}
+                maxLength={4000}
+                data-testid={`clarify-input-${question.id}`}
+              />
+              <button
+                type="submit"
+                disabled={busy || !clarifyText.trim()}
+                data-testid={`clarify-submit-${question.id}`}
+              >
+                Ask
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
 
       {err && (
         <p className="error" style={{ marginTop: '.5rem' }}>

@@ -11,9 +11,13 @@ type WireParticipant = NonNullable<WelcomePayload['you']>;
 type WireQuestion = WireSession['questions'][number];
 type WireSuggestion = WireQuestion['suggestions'][number];
 type WireComment = WireQuestion['comments'][number];
+/** CHATAI-01: a single clarification (ask + optional AI answer) from the wire schema. */
+type WireClarification = WireQuestion['clarifications'][number];
+/** CHAT-01: a single chat message from the wire schema (populated in Plan 07-02). */
+type WireChatEntry = WireSession['chat'][number];
 
 // Exported aliases for component use — avoids branded-type mismatches
-export type { WireSession, WireParticipant, WireQuestion, WireSuggestion, WireComment };
+export type { WireSession, WireParticipant, WireQuestion, WireSuggestion, WireComment, WireClarification, WireChatEntry };
 
 /**
  * Snapshot of a terminal transport failure (REL-03 / D-09). Populated when the
@@ -289,6 +293,34 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
         return { ...q, comments: [...q.comments, p.comment] };
       }),
     };
+  }
+
+  // CHATAI-01: clarification_added fires twice per clarification (ask + answer),
+  // so we upsert by clarification.id rather than unconditionally append.
+  // withOpenQuestion works for resolved questions because the reducer keeps
+  // resolved questions in session.questions[] (Phase 6 decision — flip in place).
+  if (type === 'clarification_added') {
+    if (!state.session) return { ...state, lastSeq: seq };
+    const p = payload<{ question_id: string; clarification: WireClarification }>(evt);
+    return {
+      ...state,
+      lastSeq: seq,
+      session: withOpenQuestion(state.session, p.question_id, (q) => {
+        const idx = q.clarifications.findIndex((cl) => cl.id === p.clarification.id);
+        const newList =
+          idx >= 0
+            ? q.clarifications.map((cl, i) => (i === idx ? p.clarification : cl))
+            : [...q.clarifications, p.clarification];
+        return { ...q, clarifications: newList };
+      }),
+    };
+  }
+
+  // CHAT-01: chat_added stub — full handler ships in Plan 07-02 alongside
+  // SessionManager.postChat(). For now just advance the seq watermark so
+  // reconnect dedup works correctly once the full handler is in place.
+  if (type === 'chat_added') {
+    return { ...state, lastSeq: seq };
   }
 
   if (type === 'question_resolved') {

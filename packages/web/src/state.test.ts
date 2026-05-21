@@ -1334,3 +1334,139 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
     expect(replayed.session?.questions[0]?.id).toBe('sb_q_001');
   });
 });
+
+// Phase 7 (CHATAI-01): clarification_added reducer tests
+// ---------------------------------------------------------------------------
+
+describe('reduce — clarification_added', () => {
+  // Build a base state with an open question that has an empty clarifications array
+  const baseState = reduce(initialState, welcomeEphemeral);
+  const broadcastQ: AnyFrame = {
+    seq: 5,
+    ts: '2026-01-01T00:00:05Z',
+    type: 'question_broadcast',
+    payload: {
+      question: {
+        id: 'sb_q_cl1',
+        ticket_id: 'sb_t_cl1',
+        asked_at: '2026-01-01T00:00:05Z',
+        text: 'Which DB?',
+        status: 'broadcast' as const,
+        suggestions: [],
+        comments: [],
+        clarifications: [],
+        resolution: null,
+      },
+    },
+  };
+  const stateWithQ = reduce(baseState, broadcastQ);
+
+  it('first delivery appends clarification to session.questions[qId].clarifications', () => {
+    const evt: AnyFrame = {
+      seq: 6,
+      ts: '2026-01-01T00:00:06Z',
+      type: 'clarification_added',
+      payload: {
+        question_id: 'sb_q_cl1',
+        clarification: {
+          id: 'sb_cl_001',
+          participant_id: 'sb_p_001',
+          text: 'What about latency?',
+          asked_at: '2026-01-01T00:00:06Z',
+        },
+      },
+    } as unknown as AnyFrame; // clarification_added is a ServerEvent
+    const next = reduce(stateWithQ, evt);
+    const q = next.session?.questions.find((x) => x.id === 'sb_q_cl1');
+    expect(q?.clarifications).toHaveLength(1);
+    expect(q?.clarifications[0]?.text).toBe('What about latency?');
+    expect(q?.clarifications[0]?.answer).toBeUndefined();
+    expect(next.lastSeq).toBe(6);
+  });
+
+  it('second delivery with same clarification.id replaces the entry (upsert, NOT double-append)', () => {
+    // First delivery: ask phase (no answer)
+    const askEvt: AnyFrame = {
+      seq: 6,
+      ts: '2026-01-01T00:00:06Z',
+      type: 'clarification_added',
+      payload: {
+        question_id: 'sb_q_cl1',
+        clarification: {
+          id: 'sb_cl_001',
+          participant_id: 'sb_p_001',
+          text: 'What about latency?',
+          asked_at: '2026-01-01T00:00:06Z',
+        },
+      },
+    } as unknown as AnyFrame;
+    const withAsk = reduce(stateWithQ, askEvt);
+
+    // Second delivery: answer phase (same id, now has answer)
+    const answerEvt: AnyFrame = {
+      seq: 7,
+      ts: '2026-01-01T00:00:07Z',
+      type: 'clarification_added',
+      payload: {
+        question_id: 'sb_q_cl1',
+        clarification: {
+          id: 'sb_cl_001', // same id
+          participant_id: 'sb_p_001',
+          text: 'What about latency?',
+          answer: 'Latency is sub-1ms',
+          asked_at: '2026-01-01T00:00:06Z',
+          answered_at: '2026-01-01T00:00:07Z',
+        },
+      },
+    } as unknown as AnyFrame;
+    const withAnswer = reduce(withAsk, answerEvt);
+    const q = withAnswer.session?.questions.find((x) => x.id === 'sb_q_cl1');
+    // Must be 1 entry, not 2 (upsert, not append)
+    expect(q?.clarifications).toHaveLength(1);
+    expect(q?.clarifications[0]?.answer).toBe('Latency is sub-1ms');
+    expect(withAnswer.lastSeq).toBe(7);
+  });
+
+  it('WR-07: duplicate seq is dropped — state unchanged', () => {
+    const evt: AnyFrame = {
+      seq: 6,
+      ts: '2026-01-01T00:00:06Z',
+      type: 'clarification_added',
+      payload: {
+        question_id: 'sb_q_cl1',
+        clarification: {
+          id: 'sb_cl_001',
+          participant_id: 'sb_p_001',
+          text: 'What about latency?',
+          asked_at: '2026-01-01T00:00:06Z',
+        },
+      },
+    } as unknown as AnyFrame;
+    const once = reduce(stateWithQ, evt);
+    // Same seq — must be dropped by WR-07 guard
+    const twice = reduce(once, evt);
+    expect(twice).toBe(once); // same reference
+  });
+
+  it('delivery with no matching question_id leaves session unchanged', () => {
+    const evt: AnyFrame = {
+      seq: 6,
+      ts: '2026-01-01T00:00:06Z',
+      type: 'clarification_added',
+      payload: {
+        question_id: 'sb_q_nonexistent',
+        clarification: {
+          id: 'sb_cl_001',
+          participant_id: 'sb_p_001',
+          text: 'Orphaned',
+          asked_at: '2026-01-01T00:00:06Z',
+        },
+      },
+    } as unknown as AnyFrame;
+    const next = reduce(stateWithQ, evt);
+    // withOpenQuestion returns session unchanged when idx < 0
+    expect(next.session?.questions).toHaveLength(1);
+    const q = next.session?.questions.find((x) => x.id === 'sb_q_cl1');
+    expect(q?.clarifications).toHaveLength(0);
+  });
+});

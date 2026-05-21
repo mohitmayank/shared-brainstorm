@@ -65,7 +65,34 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
 
    The ticket stays open across polls.
 
-4. **Present to the initiator and get their pick**
+4. **Handle participant clarifications (CHATAI-01)**
+
+   After each `awaitAnswer` call, **check `clarifications`** before presenting to the initiator:
+
+   ```
+   awaitAnswer({ ticket_id, timeout_s: 50 })
+   → { suggestions: [...], comments: [...],
+       clarifications: [{ participant_name, clarification_id, text, answer?, asked_at, answered_at? }],
+       resolved: false }
+   ```
+
+   - If any clarification has `answer === undefined`, the participant is waiting for your response.
+   - Answer each pending clarification **before** presenting to the initiator:
+
+   ```
+   answerClarification({
+     ticket_id,
+     clarification_id: "<the clarification_id from awaitAnswer>",
+     text: "Your answer to the participant's question"
+   })
+   → { ok: true }
+   ```
+
+   - Your answer broadcasts in real-time to all connected clients — the waiting participant sees it immediately.
+   - **Clarifications are separate from suggestions** — they are informational context only. Do not include clarification text in the suggestion tally; do not present them as answer options.
+   - `answerClarification` still works after `recordAnswer` (terminal fallback) — you can answer late clarifications for context.
+
+5. **Present to the initiator and get their pick**
    Use Claude Code's built-in `AskUserQuestion` to show the initiator what the team said. Guidelines:
    - **Option-style questions**: tally votes from suggestions; list each option with its tally; recommend the leader.
    - **Free-text questions, 0 suggestions**: ask the initiator to either wait longer or write the answer themselves.

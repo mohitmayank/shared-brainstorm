@@ -8,9 +8,11 @@ interface Props {
   sessionStatus: 'waiting' | 'question_open' | 'choosing' | 'done';
   presence: Record<string, { activity: string; expiresAt: number }>;
   onTyping: (questionId: string, state: 'start' | 'stop') => void;
+  /** CHATAI-01: forwards post_clarification WS command. */
+  onAsk?: (questionId: string, text: string) => void;
 }
 
-export function Session({ session, me, sessionStatus, presence, onTyping }: Props) {
+export function Session({ session, me, sessionStatus, presence, onTyping, onAsk }: Props) {
   const activeQuestions = (session.questions ?? []).filter((q) => q.status === 'broadcast');
 
   return (
@@ -79,6 +81,7 @@ export function Session({ session, me, sessionStatus, presence, onTyping }: Prop
             me={me}
             participants={session.participants}
             onTyping={onTyping}
+            {...(onAsk !== undefined ? { onAsk } : {})}
           />
         ))}
       </div>

@@ -1,13 +1,21 @@
 # shared-brainstorm
 
-Bring your team into your AI agent's planning loop. When your agent has a design question, share a link with your team — they answer in a live web page — and the agent uses their input as it plans, while you (the initiator) drive everything from the terminal.
+Get your team's input on your AI agent's design decisions — live in their browser, in seconds, with nothing to install.
+
+Your AI plans alone, but real product decisions need your team. Your agent asks *"Postgres or DynamoDB?"* — your teammates weigh in on a live page — your agent plans with their answer.
+
+→ [See it in action](https://github.com/mohitmayank/shared-brainstorm/blob/main/demo/index.html)
 
 ## What you get
 
-- One link + 6-digit code to share with your team. No accounts, no install on their side.
-- Teammates open the link in a browser and type suggestions and comments.
-- Your agent collects the team's input and asks *you* to confirm the final pick — right in the CLI.
-- A transcript of every decision is saved to `~/.shared-brainstorm/sessions/`.
+- **Link-only join** — the host approves each joiner (no code). Teammates just open the link in any browser.
+- Teammates submit suggestions, comments, and clarifying questions in real time.
+- **Live presence indicators** and session status visible to all participants.
+- **Batch questions** — the agent can post multiple questions at once; teammates answer in any order.
+- **Talk-with-AI** — participants can ask the agent clarifying questions; the reply appears inline.
+- **Per-room chat** — teammates can discuss freely alongside the suggestion stream.
+- **Coordinator web UI** — drive the session from a browser tab alongside the CLI; approve, lock, and kick participants.
+- A transcript of every decision saved to `~/.shared-brainstorm/sessions/`.
 
 ## Install
 
@@ -36,7 +44,7 @@ sudo dpkg -i cloudflared-linux-amd64.deb
 
 Skip `cloudflared` if your team is already on the same network.
 
-## Use
+## How it works
 
 Ask your agent to brainstorm with your team — for example:
 
@@ -44,11 +52,12 @@ Ask your agent to brainstorm with your team — for example:
 
 Your agent will:
 
-1. Spin up a session and hand you a share link + join code (auto-copied to your clipboard).
-2. Post each question to the live page.
-3. Show you the team's responses in the CLI and let you pick the final answer (or override with your own).
+1. Spin up a session and hand you a share link (auto-copied to your clipboard).
+2. Your teammates open the link — the host approves each one before they enter the session.
+3. Post questions to the live page (one at a time, or a batch). Teammates submit suggestions and comments in real time.
+4. Pick the final answer from the CLI or from the coordinator browser UI. Lock or kick participants as needed.
 
-You can drive the whole brainstorm from the terminal; you never need to open the web page.
+You can drive the whole session from the terminal; the coordinator browser UI is available for a more visual experience.
 
 ## Environment variables
 

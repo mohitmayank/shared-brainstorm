@@ -7,7 +7,6 @@
  * Test 4: pending participant cannot post to chat (compose input hidden).
  */
 import { test, expect } from './fixtures.js';
-import { askGroup } from '../packages/server/src/mcp/tools.js';
 import { joinAndApprove } from './helpers.js';
 
 test('two participants see each other\'s messages in room chat', async ({ session, browser }) => {
@@ -20,7 +19,6 @@ test('two participants see each other\'s messages in room chat', async ({ sessio
 
   try {
     // Open a question so the session is active
-    askGroup({ question: 'What should we build?' });
 
     // Join participant1
     await joinAndApprove(page1, coordPage, {
@@ -72,7 +70,6 @@ test('coordinator chat message is labeled (host)', async ({ session, browser }) 
   const coordPage = await coordCtx.newPage();
 
   try {
-    askGroup({ question: 'Pick a framework' });
 
     await joinAndApprove(participantPage, coordPage, {
       publicUrl: session.public_url,
@@ -109,7 +106,6 @@ test('late-joiner sees full chat history from welcome', async ({ session, browse
   const coordPage = await coordCtx.newPage();
 
   try {
-    askGroup({ question: 'How to handle auth?' });
 
     // Participant1 joins and posts a message
     await joinAndApprove(page1, coordPage, {
@@ -161,7 +157,6 @@ test('pending participant cannot post to chat (compose input hidden)', async ({
   const coordPage = await coordCtx.newPage();
 
   try {
-    askGroup({ question: 'Microservices or monolith?' });
 
     // Coordinator opens their page
     await coordPage.goto(session.coordinator_url);

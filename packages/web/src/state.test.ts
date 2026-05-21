@@ -1470,3 +1470,165 @@ describe('reduce — clarification_added', () => {
     expect(q?.clarifications).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// CHAT-01: chat_added reducer and WR-07 dual-seed protection
+// ---------------------------------------------------------------------------
+
+const chatEntry1 = {
+  id: 'sb_ch_001',
+  actor_kind: 'participant' as const,
+  actor_id: 'sb_p_001',
+  display_name: 'Alice',
+  text: 'Hello room!',
+  at: '2026-01-01T00:00:10Z',
+};
+
+const chatEntry2 = {
+  id: 'sb_ch_002',
+  actor_kind: 'coordinator' as const,
+  display_name: 'Coordinator',
+  text: 'Welcome!',
+  at: '2026-01-01T00:00:11Z',
+};
+
+// State with a session that has no chat yet
+const stateWithEmptyChat = reduce(initialState, welcomeEphemeral);
+
+describe('reduce — chat_added', () => {
+  it('Test 1: appends new entry to session.chat', () => {
+    const evt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry1 },
+    } as unknown as AnyFrame;
+    const next = reduce(stateWithEmptyChat, evt);
+    expect(next.session?.chat).toHaveLength(1);
+    expect(next.session?.chat[0]).toEqual(chatEntry1);
+    expect(next.lastSeq).toBe(5);
+  });
+
+  it('Test 2: id-dedup — second delivery of same entry.id does not add a duplicate', () => {
+    const evt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry1 },
+    } as unknown as AnyFrame;
+    const afterFirst = reduce(stateWithEmptyChat, evt);
+    // Same id, higher seq — should still be deduplicated
+    const duplicate: AnyFrame = {
+      seq: 6,
+      ts: '2026-01-01T00:00:11Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry1 },
+    } as unknown as AnyFrame;
+    const afterSecond = reduce(afterFirst, duplicate);
+    expect(afterSecond.session?.chat).toHaveLength(1);
+    expect(afterSecond.lastSeq).toBe(6); // seq advanced but no new entry
+  });
+
+  it('Test 3: WR-07 — duplicate seq (seq <= lastSeq) is dropped globally', () => {
+    const evt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry1 },
+    } as unknown as AnyFrame;
+    const afterFirst = reduce(stateWithEmptyChat, evt);
+    // Stale event with seq <= lastSeq
+    const stale: AnyFrame = {
+      seq: 4,
+      ts: '2026-01-01T00:00:09Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry2 },
+    } as unknown as AnyFrame;
+    const result = reduce(afterFirst, stale);
+    expect(result).toBe(afterFirst); // same reference — dropped
+    expect(result.session?.chat).toHaveLength(1);
+  });
+
+  it('Test 4: welcome seeds session.chat from SessionView', () => {
+    const welcomeWithChat: AnyFrame = {
+      type: 'welcome',
+      payload: {
+        session: {
+          ...welcomeEphemeral.payload.session,
+          chat: [chatEntry1],
+        },
+        you: welcomeEphemeral.payload.you,
+        is_coordinator: false,
+      },
+    };
+    const next = reduce(initialState, welcomeWithChat);
+    expect(next.session?.chat).toHaveLength(1);
+    expect(next.session?.chat[0]!.id).toBe('sb_ch_001');
+  });
+
+  it('Test 5: subsequent chat_added with different id appends (no collision)', () => {
+    const evt1: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry1 },
+    } as unknown as AnyFrame;
+    const evt2: AnyFrame = {
+      seq: 6,
+      ts: '2026-01-01T00:00:11Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry2 },
+    } as unknown as AnyFrame;
+    const after1 = reduce(stateWithEmptyChat, evt1);
+    const after2 = reduce(after1, evt2);
+    expect(after2.session?.chat).toHaveLength(2);
+    expect(after2.session?.chat[0]!.id).toBe('sb_ch_001');
+    expect(after2.session?.chat[1]!.id).toBe('sb_ch_002');
+  });
+
+  it('Test 6: chat_added with no session returns state unchanged (lastSeq advanced)', () => {
+    const evt: AnyFrame = {
+      seq: 5,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry1 },
+    } as unknown as AnyFrame;
+    const result = reduce(initialState, evt);
+    expect(result.session).toBeNull();
+    expect(result.lastSeq).toBe(5);
+  });
+});
+
+describe('reduce — chat seeding WR-07 dual-seed protection', () => {
+  it('welcome with chat=[e1] followed by chat_added{id:e1.id} replay — session.chat.length === 1 (not 2)', () => {
+    // Simulate a welcome that includes an existing chat entry at lastSeq=10
+    const welcomeWithChat: AnyFrame = {
+      seq: 10,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'welcome',
+      payload: {
+        session: {
+          ...welcomeEphemeral.payload.session,
+          chat: [chatEntry1],
+        },
+        you: welcomeEphemeral.payload.you,
+        is_coordinator: false,
+      },
+    };
+    const afterWelcome = reduce(initialState, welcomeWithChat);
+    expect(afterWelcome.session?.chat).toHaveLength(1);
+    expect(afterWelcome.lastSeq).toBe(10);
+
+    // Replay the chat_added that seeded the entry — seq 8 < lastSeq 10
+    // The WR-07 global seq guard drops it before reaching the chat handler
+    const replayEvt: AnyFrame = {
+      seq: 8,
+      ts: '2026-01-01T00:00:08Z',
+      type: 'chat_added',
+      payload: { entry: chatEntry1 },
+    } as unknown as AnyFrame;
+    const result = reduce(afterWelcome, replayEvt);
+    expect(result).toBe(afterWelcome); // dropped by seq guard
+    expect(result.session?.chat).toHaveLength(1); // not 2
+  });
+});

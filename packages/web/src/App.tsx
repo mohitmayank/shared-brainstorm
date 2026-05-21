@@ -233,6 +233,11 @@ export function App() {
     wsRef.current?.send(JSON.stringify({ type: 'post_clarification', question_id: questionId, text }));
   }, []);
 
+  // CHAT-01: send post_chat WS command from both participant and coordinator views.
+  const sendChat = useCallback((text: string) => {
+    wsRef.current?.send(JSON.stringify({ type: 'post_chat', text }));
+  }, []);
+
   // REL-05 / D-20: tracks the URL the user last clicked dismiss on. Pitfall 3:
   // a new `tunnel_url_changed` with a *different* URL replaces
   // `state.tunnelBanner.url`, and the equality check below no longer holds,
@@ -536,6 +541,7 @@ export function App() {
           roomLocked={state.roomLocked}
           sessionStatus={state.sessionStatus}
           onPicking={sendPicking}
+          onChat={sendChat}
         />
       ) : coordinatorMode && coordinatorStatus === 'invalid' ? (
         <div className="card coordinator-error" data-testid="coordinator-error" role="alert">
@@ -585,8 +591,10 @@ export function App() {
           me={state.me!}
           sessionStatus={state.sessionStatus}
           presence={state.presence}
+          myStatus={state.myStatus}
           onTyping={sendTyping}
           onAsk={sendAsk}
+          onChat={sendChat}
         />
       ) : resuming && !needsJoin ? (
         <div className="card" style={{ marginTop: '2rem' }}>

@@ -316,11 +316,23 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     };
   }
 
-  // CHAT-01: chat_added stub — full handler ships in Plan 07-02 alongside
-  // SessionManager.postChat(). For now just advance the seq watermark so
-  // reconnect dedup works correctly once the full handler is in place.
+  // CHAT-01: chat_added appends entry to session.chat with WR-07 id-dedup
+  // (belt-and-suspenders alongside the global seq guard — catches the
+  // welcome-exempt edge where a chat_added replay has seq > welcome's lastSeq
+  // but the entry was already seeded into session.chat by the welcome payload).
   if (type === 'chat_added') {
-    return { ...state, lastSeq: seq };
+    if (!state.session) return { ...state, lastSeq: seq };
+    const p = payload<{ entry: WireChatEntry }>(evt);
+    const already = state.session.chat.find((e) => e.id === p.entry.id);
+    if (already) return { ...state, lastSeq: seq };
+    return {
+      ...state,
+      lastSeq: seq,
+      session: {
+        ...state.session,
+        chat: [...state.session.chat, p.entry],
+      },
+    };
   }
 
   if (type === 'question_resolved') {

@@ -4,6 +4,7 @@ import { postCoordinatorAnswer, postApprove, postKick, postLock } from '../lib/a
 import { DecisionsPanel } from '../components/coordinator/DecisionsPanel.js';
 import { CoordinatorQuestionCard } from '../components/coordinator/CoordinatorQuestionCard.js';
 import { SessionStatusPill } from '../components/SessionStatusPill.js';
+import { ChatPanel } from '../components/ChatPanel.js';
 
 interface CoordinatorProps {
   session: WireSession;
@@ -11,6 +12,8 @@ interface CoordinatorProps {
   roomLocked: boolean;
   sessionStatus: 'waiting' | 'question_open' | 'choosing' | 'done';
   onPicking: (ticketId: string, state: 'start' | 'stop') => void;
+  /** CHAT-01: WS send function for the coordinator's chat messages. */
+  onChat: (text: string) => void;
 }
 
 /** Per-ticket pick UI state (UI-SPEC Per-Component Contract). */
@@ -48,7 +51,7 @@ function nameFor(participants: WireParticipant[], id: string): string {
  * flips to resolved purely from the incoming `question_resolved` WS event
  * (handled by the reducer) — this component only drives the POST + error copy.
  */
-export function Coordinator({ session, roomLocked, sessionStatus, onPicking }: CoordinatorProps) {
+export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onChat }: CoordinatorProps) {
   const openQuestions = session.questions ?? [];
   const [cards, setCards] = useState<Record<string, CardState>>({});
 
@@ -269,6 +272,15 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking }: C
       </div>
 
       <DecisionsPanel decisions={session.decisions} />
+
+      {/* CHAT-01: session-level room chat — coordinator always allowed to post */}
+      <ChatPanel
+        chat={session.chat ?? []}
+        me={null}
+        isCoordinator={true}
+        myStatus={null}
+        onSend={onChat}
+      />
 
       <div aria-live="polite" aria-relevant="additions text">
         {openQuestions.length > 0 ? (

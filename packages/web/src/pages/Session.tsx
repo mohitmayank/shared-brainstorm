@@ -1,18 +1,23 @@
 import type { WireSession, WireParticipant } from '../state.js';
 import { QuestionCard } from '../components/QuestionCard.js';
 import { SessionStatusPill } from '../components/SessionStatusPill.js';
+import { ChatPanel } from '../components/ChatPanel.js';
 
 interface Props {
   session: WireSession;
   me: WireParticipant;
   sessionStatus: 'waiting' | 'question_open' | 'choosing' | 'done';
   presence: Record<string, { activity: string; expiresAt: number }>;
+  /** Current participant's approval status (from UiState.myStatus). */
+  myStatus: 'pending' | 'approved' | 'kicked' | null;
   onTyping: (questionId: string, state: 'start' | 'stop') => void;
   /** CHATAI-01: forwards post_clarification WS command. */
   onAsk?: (questionId: string, text: string) => void;
+  /** CHAT-01: forwards post_chat WS command. */
+  onChat: (text: string) => void;
 }
 
-export function Session({ session, me, sessionStatus, presence, onTyping, onAsk }: Props) {
+export function Session({ session, me, sessionStatus, presence, myStatus, onTyping, onAsk, onChat }: Props) {
   const activeQuestions = (session.questions ?? []).filter((q) => q.status === 'broadcast');
 
   return (
@@ -67,6 +72,15 @@ export function Session({ session, me, sessionStatus, presence, onTyping, onAsk 
           </ul>
         </div>
       )}
+
+      {/* CHAT-01: session-level room chat — distinct from per-question suggestion/comment streams */}
+      <ChatPanel
+        chat={session.chat ?? []}
+        me={me}
+        isCoordinator={false}
+        myStatus={myStatus}
+        onSend={onChat}
+      />
 
       <div data-testid="batch-question-list" aria-label="Open questions">
         {activeQuestions.length > 1 && (

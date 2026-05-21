@@ -546,11 +546,23 @@ export class SessionManager {
    * The AI host decides what to do with the snapshot — typically presents it
    * to the initiator and then calls `recordAnswer`. The ticket stays pending
    * across timed-out polls, so the caller can poll again.
+   *
+   * WR-01: ticket_to_question is pruned when a question resolves/cancels/times
+   * out, so the fast-path Map lookup will miss a ticket that was already resolved
+   * (e.g. the coordinator browser answers faster than the MCP tool polls). The
+   * terminalQuestions fallback handles this case — if the ticket is found there,
+   * return its snapshot immediately with resolved=true (for 'resolved' status)
+   * or resolved=false (for 'cancelled'/'timeout').
    */
   async awaitAnswer(input: AwaitAnswerInput): Promise<AwaitAnswerOutput> {
     const a = this.requireActive();
     const qid = a.ticket_to_question.get(input.ticket_id);
     if (!qid) {
+      // WR-01: ticket not in the live map — check terminalQuestions.
+      const terminal = this.terminalQuestions.find((q) => q.ticket_id === input.ticket_id);
+      if (terminal) {
+        return this.snapshot(terminal.id as QuestionId, terminal.status === 'resolved');
+      }
       return { suggestions: [], comments: [], clarifications: [], resolved: false };
     }
     const signal = await this.tickets.waitFor(input.ticket_id, input.timeout_s * 1000);

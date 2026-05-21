@@ -1821,4 +1821,31 @@ describe('WR-01: ticket_to_question pruning', () => {
       cleanup();
     }
   });
+
+  it('awaitAnswer on an already-resolved ticket (ticket_to_question pruned) returns resolved=true via terminalQuestions fallback', async () => {
+    // Regression guard for the e2e coordinator flow: the coordinator browser
+    // can POST /api/coordinator/answer (triggering recordAnswer) BEFORE the MCP
+    // tool calls awaitAnswer. After WR-01 pruning, ticket_to_question.get()
+    // returns undefined — awaitAnswer must fall through to terminalQuestions
+    // and return a complete, resolved snapshot rather than an empty one with
+    // resolved=false.
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'await after resolve' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      const qid = mgr.currentQuestion()!.id;
+      mgr.postSuggestion({ participant_id: p.id, question_id: qid, value: 'Postgres' });
+      // Resolve the question BEFORE calling awaitAnswer (simulates coordinator-browser-first path)
+      mgr.recordAnswer({ question_id: qid, value: 'Postgres', source: 'suggestion' });
+      // awaitAnswer must return resolved=true immediately via terminalQuestions fallback
+      const snap = await mgr.awaitAnswer({ ticket_id, timeout_s: 5 });
+      expect(snap.resolved).toBe(true);
+      expect(snap.suggestions).toHaveLength(1);
+      expect(snap.suggestions[0]!.value).toBe('Postgres');
+    } finally {
+      cleanup();
+    }
+  });
 });

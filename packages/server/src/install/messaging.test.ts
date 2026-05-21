@@ -1,8 +1,9 @@
 // packages/server/src/install/messaging.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 import { runInstall } from './index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -37,6 +38,10 @@ describe('DISC-01: README messaging', () => {
   it('contains absolute GitHub demo link', () => {
     expect(readme.includes('github.com/mohitmayank/shared-brainstorm')).toBe(true);
   });
+
+  it('demo link uses htmlpreview renderer, not raw blob view', () => {
+    expect(readme.includes('htmlpreview.github.io')).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -45,8 +50,12 @@ describe('DISC-01: README messaging', () => {
 
 describe('DISC-01: install success message', () => {
   let stdoutCalls: string[];
+  let tmpHome: string;
 
   beforeEach(() => {
+    // Isolate filesystem writes to a temp dir — prevents runInstall from
+    // writing to ~/.claude.json, ~/.shared-brainstorm/prompts/, etc.
+    tmpHome = mkdtempSync(join(tmpdir(), 'sb-msg-test-'));
     stdoutCalls = [];
     vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
       stdoutCalls.push(typeof chunk === 'string' ? chunk : chunk.toString());
@@ -56,28 +65,29 @@ describe('DISC-01: install success message', () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    rmSync(tmpHome, { recursive: true, force: true });
   });
 
   it('runInstall claude-code emits what-to-do-next line', async () => {
-    await runInstall('claude-code');
+    await runInstall('claude-code', { home: tmpHome });
     const combined = stdoutCalls.join('');
     expect(combined.includes('ask your agent to brainstorm')).toBe(true);
   });
 
   it('runInstall codex emits what-to-do-next line', async () => {
-    await runInstall('codex');
+    await runInstall('codex', { home: tmpHome });
     const combined = stdoutCalls.join('');
     expect(combined.includes('ask your agent to brainstorm')).toBe(true);
   });
 
   it('runInstall opencode emits what-to-do-next line', async () => {
-    await runInstall('opencode');
+    await runInstall('opencode', { home: tmpHome });
     const combined = stdoutCalls.join('');
     expect(combined.includes('ask your agent to brainstorm')).toBe(true);
   });
 
   it('runInstall gemini-cli emits what-to-do-next line', async () => {
-    await runInstall('gemini-cli');
+    await runInstall('gemini-cli', { home: tmpHome });
     const combined = stdoutCalls.join('');
     expect(combined.includes('ask your agent to brainstorm')).toBe(true);
   });

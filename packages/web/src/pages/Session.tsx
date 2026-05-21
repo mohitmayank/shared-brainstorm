@@ -15,9 +15,11 @@ interface Props {
   onAsk?: (questionId: string, text: string) => void;
   /** CHAT-01: forwards post_chat WS command. */
   onChat: (text: string) => void;
+  /** WR-03: whether the WS is currently open — gates the ChatPanel Send affordance. */
+  wsConnected: boolean;
 }
 
-export function Session({ session, me, sessionStatus, presence, myStatus, onTyping, onAsk, onChat }: Props) {
+export function Session({ session, me, sessionStatus, presence, myStatus, onTyping, onAsk, onChat, wsConnected }: Props) {
   const activeQuestions = (session.questions ?? []).filter((q) => q.status === 'broadcast');
 
   return (
@@ -80,6 +82,7 @@ export function Session({ session, me, sessionStatus, presence, myStatus, onTypi
         isCoordinator={false}
         myStatus={myStatus}
         onSend={onChat}
+        connected={wsConnected}
       />
 
       <div data-testid="batch-question-list" aria-label="Open questions">

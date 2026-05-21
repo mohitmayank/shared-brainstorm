@@ -14,6 +14,8 @@ interface CoordinatorProps {
   onPicking: (ticketId: string, state: 'start' | 'stop') => void;
   /** CHAT-01: WS send function for the coordinator's chat messages. */
   onChat: (text: string) => void;
+  /** WR-03: whether the WS is currently open — gates the ChatPanel Send affordance. */
+  wsConnected: boolean;
 }
 
 /** Per-ticket pick UI state (UI-SPEC Per-Component Contract). */
@@ -51,7 +53,7 @@ function nameFor(participants: WireParticipant[], id: string): string {
  * flips to resolved purely from the incoming `question_resolved` WS event
  * (handled by the reducer) — this component only drives the POST + error copy.
  */
-export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onChat }: CoordinatorProps) {
+export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onChat, wsConnected }: CoordinatorProps) {
   const openQuestions = session.questions ?? [];
   const [cards, setCards] = useState<Record<string, CardState>>({});
 
@@ -280,6 +282,7 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
         isCoordinator={true}
         myStatus={null}
         onSend={onChat}
+        connected={wsConnected}
       />
 
       <div aria-live="polite" aria-relevant="additions text">

@@ -151,6 +151,13 @@ export function App() {
       );
     }
   }, []);
+  // WR-03: true while the WS socket is open. Passed to ChatPanel as `connected`
+  // so the Send affordance is gated on connectivity — a message typed while
+  // disconnected would otherwise be silently dropped by the optional-chaining
+  // wsRef.current?.send() call. Reset to false on every onClose callback;
+  // set to true on every successful `welcome` event (which only fires while
+  // the socket is open and the server has accepted the handshake).
+  const [wsConnected, setWsConnected] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
   // True when the server returned 423 (coordinator locked the room).
   const [joinLocked, setJoinLocked] = useState(false);
@@ -287,6 +294,8 @@ export function App() {
           setNeedsJoin(false);
           setWsRetryCount(0);
           wsRetryCountRef.current = 0;
+          // WR-03: mark socket as connected so ChatPanel enables the Send affordance.
+          setWsConnected(true);
         }
         // Phase 5 (PRES-02): schedule TTL sweeps for ephemeral presence frames.
         // Narrow through `as unknown` to access presence payload — AnyFrame is a
@@ -319,6 +328,9 @@ export function App() {
       },
       onClose: (info: CloseInfo) => {
         wsRef.current = null;
+        // WR-03: socket is no longer open — disable ChatPanel Send affordance
+        // immediately so any in-progress compose is not silently dropped.
+        setWsConnected(false);
         if (info.code === NOT_JOINED_CODE) {
           if (coordinatorMode) {
             // UI-SPEC: a coordinator whose sb_c cookie is rejected (1008) must
@@ -542,6 +554,7 @@ export function App() {
           sessionStatus={state.sessionStatus}
           onPicking={sendPicking}
           onChat={sendChat}
+          wsConnected={wsConnected}
         />
       ) : coordinatorMode && coordinatorStatus === 'invalid' ? (
         <div className="card coordinator-error" data-testid="coordinator-error" role="alert">
@@ -595,6 +608,7 @@ export function App() {
           onTyping={sendTyping}
           onAsk={sendAsk}
           onChat={sendChat}
+          wsConnected={wsConnected}
         />
       ) : resuming && !needsJoin ? (
         <div className="card" style={{ marginTop: '2rem' }}>

@@ -9,6 +9,13 @@ interface ChatPanelProps {
   /** null for the coordinator. */
   myStatus: 'pending' | 'approved' | 'kicked' | null;
   onSend: (text: string) => void;
+  /**
+   * WR-03: Whether the WS connection is currently open. When false the Send
+   * button and input are disabled so a disconnected user cannot type a message
+   * that would be silently dropped. Input text is preserved so nothing is lost
+   * across a reconnect cycle.
+   */
+  connected: boolean;
 }
 
 /**
@@ -22,26 +29,16 @@ interface ChatPanelProps {
  * The chat-messages region has a fixed max-height with internal scroll
  * (layout-shift-free per UI-SPEC §51).
  */
-export function ChatPanel({ chat, me, isCoordinator, myStatus, onSend }: ChatPanelProps) {
+export function ChatPanel({ chat, me, isCoordinator, myStatus, onSend, connected }: ChatPanelProps) {
   const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
 
   const canPost = isCoordinator || myStatus === 'approved';
 
-  async function handleSend(e: FormEvent) {
+  function handleSend(e: FormEvent) {
     e.preventDefault();
-    if (!text.trim()) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      onSend(text.trim());
-      setText('');
-    } catch {
-      setErr("Couldn't send that — try again.");
-    } finally {
-      setBusy(false);
-    }
+    if (!text.trim() || !connected) return;
+    onSend(text.trim());
+    setText('');
   }
 
   return (
@@ -86,22 +83,22 @@ export function ChatPanel({ chat, me, isCoordinator, myStatus, onSend }: ChatPan
             <input
               data-testid="chat-input"
               type="text"
-              placeholder="Message the room…"
+              placeholder={connected ? 'Message the room…' : 'Reconnecting…'}
               value={text}
               onChange={(e) => setText(e.target.value)}
               maxLength={4000}
+              disabled={!connected}
             />
             <button
               data-testid="chat-send"
               type="submit"
-              disabled={busy || !text.trim()}
+              disabled={!connected || !text.trim()}
             >
               Send
             </button>
           </div>
         </form>
       )}
-      {err && <p className="error">{err}</p>}
     </section>
   );
 }

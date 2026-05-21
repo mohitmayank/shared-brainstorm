@@ -4,7 +4,7 @@ Get your team's input on your AI agent's design decisions — live in their brow
 
 Your AI plans alone, but real product decisions need your team. Your agent asks *"Postgres or DynamoDB?"* — your teammates weigh in on a live page — your agent plans with their answer.
 
-→ [See it in action](https://github.com/mohitmayank/shared-brainstorm/blob/main/demo/index.html)
+→ [See it in action](https://htmlpreview.github.io/?https://github.com/mohitmayank/shared-brainstorm/blob/main/demo/index.html)
 
 ## What you get
 

@@ -64,7 +64,6 @@
       border-top: 1px solid var(--border);
     }
 
-    /* Terminal pane — deliberate visual contrast, not a design system token */
     /* Terminal pane uses #1e1e1e — deliberate visual contrast, not a design system token */
     .pane-terminal {
       width: 50%;
@@ -482,9 +481,11 @@
     var browserPane = document.getElementById('browser-pane');
 
     // ---------------------------------------------------------------------------
-    // Timer — module-level, always cleared before replay (Pitfall 3)
+    // Timers — module-level, always cleared before replay (Pitfall 3)
+    // scene3Timer tracks the inner 500ms delayed fade-in; cleared alongside timer.
     // ---------------------------------------------------------------------------
     var timer = null;
+    var scene3Timer = null;
 
     // ---------------------------------------------------------------------------
     // Typewriter helper
@@ -566,7 +567,7 @@
       requestAnimationFrame(function () {
         requestAnimationFrame(function () {
           suggestionSam.classList.add('visible');
-          setTimeout(function () {
+          scene3Timer = setTimeout(function () {
             suggestionAlex.classList.add('visible');
           }, 500);
         });
@@ -676,7 +677,9 @@
     // Replay
     // ---------------------------------------------------------------------------
     function replay() {
-      clearTimeout(timer);  // Pitfall 3: always clear before reset
+      clearTimeout(timer);       // Pitfall 3: always clear before reset
+      clearTimeout(scene3Timer); // scene3's inner delayed fade-in must also be cancelled
+      scene3Timer = null;
       reset();
       step(0);
     }

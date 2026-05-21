@@ -25,6 +25,7 @@ export function Join({ defaultName, onSubmit, error }: JoinProps) {
   return (
     <div className="card" style={{ marginTop: '2rem' }}>
       <h1>shared-brainstorm</h1>
+      <p className="muted">A teammate is running an AI brainstorm and wants your input.</p>
       <form onSubmit={handleSubmit}>
         <div style={{ marginBottom: '.75rem' }}>
           <label htmlFor="name">Display name</label>
@@ -62,6 +63,9 @@ export function Join({ defaultName, onSubmit, error }: JoinProps) {
             {error}
           </p>
         )}
+        <p className="muted" style={{ marginBottom: '.5rem' }}>
+          Pick a name to join. The host lets you in, then you'll see their questions.
+        </p>
         <button type="submit" disabled={busy || name.trim().length === 0}>
           {busy ? 'Joining…' : 'Continue'}
         </button>

@@ -712,3 +712,97 @@ describe('post_clarification command', () => {
     expect(q.clarifications[0]!.text).toBe('What about latency?');
   });
 });
+
+// ---------------------------------------------------------------------------
+// CHAT-01: post_chat command gate (ws.ts)
+// ---------------------------------------------------------------------------
+
+describe('post_chat command', () => {
+  it('coordinator: calls postChat with actor_kind "coordinator" and display_name "Coordinator" (server-literal)', async () => {
+    const { router, mgr } = setup();
+    const conn = await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    conn.handle({ type: 'post_chat', text: 'Hello from coordinator' });
+    const chat = mgr.sessionView().chat;
+    expect(chat).toHaveLength(1);
+    expect(chat[0]!.actor_kind).toBe('coordinator');
+    expect(chat[0]!.display_name).toBe('Coordinator');
+    expect(chat[0]!.text).toBe('Hello from coordinator');
+    expect('actor_id' in chat[0]!).toBe(false);
+  });
+
+  it('approved participant: calls postChat with actor_kind "participant" and server-derived display_name', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Bob' });
+    mgr.approveParticipant(p.id);
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    conn.handle({ type: 'post_chat', text: 'Hello from Bob' });
+    const chat = mgr.sessionView().chat;
+    expect(chat).toHaveLength(1);
+    expect(chat[0]!.actor_kind).toBe('participant');
+    expect(chat[0]!.display_name).toBe('Bob');
+    expect(chat[0]!.actor_id).toBe(p.id);
+    expect(chat[0]!.text).toBe('Hello from Bob');
+  });
+
+  it('pending participant is silently ignored — no chat message appended', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Pending' });
+    // NOT approved
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    conn.handle({ type: 'post_chat', text: 'pending chat attempt' });
+    expect(mgr.sessionView().chat).toHaveLength(0);
+  });
+
+  it('kicked participant is silently ignored — no chat message appended', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Kicked' });
+    mgr.approveParticipant(p.id);
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    // Kick AFTER connecting
+    mgr.kickParticipant(p.id);
+    conn.handle({ type: 'post_chat', text: 'kicked chat attempt' });
+    expect(mgr.sessionView().chat).toHaveLength(0);
+  });
+
+  it('actor identity is server-derived — display_name cannot be overridden by client payload', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'TrueAlice' });
+    mgr.approveParticipant(p.id);
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    // Client tries to inject extra fields — schema strips them, display_name is server-derived
+    conn.handle({ type: 'post_chat', text: 'genuine message' });
+    const chat = mgr.sessionView().chat;
+    expect(chat[0]!.display_name).toBe('TrueAlice'); // server-derived, not from client payload
+    expect(chat[0]!.actor_id).toBe(p.id);
+  });
+});

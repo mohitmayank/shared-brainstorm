@@ -221,10 +221,28 @@ export function createWsRouter({
               text: c.text,
             });
             return;
-          // NOTE: case 'post_chat' handler is NOT added here — ships in Plan 07-02
-          // alongside SessionManager.postChat(). The wire schema is present in
-          // ClientCommand (events.ts) for forward-compat, but the runtime handler
-          // lives in the next plan to keep 07-01 focused on CHATAI-01.
+          case 'post_chat': {
+            // CHAT-01 / T-07-07 anti-spoof: actor_kind and display_name are ALWAYS
+            // server-derived from the WS closure (isCoordinator + me fixed at WS
+            // upgrade time from sb_c / sb_p cookies). The post_chat ClientCommand
+            // carries only `text` — the server never reads actor fields from the frame.
+            // T-07-08: dual gate — coordinator OR approved participant (pending/kicked blocked).
+            if (!isCoordinator) {
+              if (!me) return;
+              const freshChat = manager.sessionView().participants.find((x) => x.id === me.id);
+              if (freshChat?.status !== 'approved') return;
+            }
+            const actor_kind = isCoordinator ? ('coordinator' as const) : ('participant' as const);
+            const actor_id = isCoordinator ? undefined : me!.id;
+            const display_name = isCoordinator ? 'Coordinator' : me!.display_name;
+            manager.postChat({
+              actor_kind,
+              ...(actor_id !== undefined ? { actor_id } : {}),
+              display_name,
+              text: c.text,
+            });
+            return;
+          }
           case 'pong':
             sub.lastSeen = Date.now();
             return;

@@ -45,6 +45,9 @@ export const TranscriptV2 = z.object({
         .nullable(),
     }),
   ),
+  // CHAT-01: session-level durable chat list. Optional for back-compat with
+  // transcripts written before Phase 7 (schema_version stays 2 — additive).
+  chat: z.array(z.unknown()).optional(),
 });
 export type TranscriptV2 = z.infer<typeof TranscriptV2>;
 

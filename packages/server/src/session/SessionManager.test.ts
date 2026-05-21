@@ -1605,3 +1605,127 @@ describe('answerClarification', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// CHAT-01: postChat
+// ---------------------------------------------------------------------------
+
+describe('postChat', () => {
+  it('Test 1: approved participant path appends ChatEntry and emits chat_added', () => {
+    const { mgr, events, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'chat test' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      mgr.postChat({
+        actor_kind: 'participant',
+        actor_id: p.id,
+        display_name: 'Alice',
+        text: 'Hello room!',
+      });
+      const view = mgr.sessionView();
+      expect(view.chat).toHaveLength(1);
+      expect(view.chat[0]!.actor_kind).toBe('participant');
+      expect(view.chat[0]!.display_name).toBe('Alice');
+      expect(view.chat[0]!.text).toBe('Hello room!');
+      expect(view.chat[0]!.actor_id).toBe(p.id);
+      // chat_added event emitted
+      const chatEvt = events.find((e) => e.type === 'chat_added');
+      expect(chatEvt).toBeDefined();
+      if (chatEvt && chatEvt.type === 'chat_added') {
+        const ev = chatEvt as { type: string; payload: { entry: { id: string; actor_kind: string; display_name: string; text: string } } };
+        expect(ev.payload.entry.actor_kind).toBe('participant');
+        expect(ev.payload.entry.display_name).toBe('Alice');
+        expect(ev.payload.entry.text).toBe('Hello room!');
+        expect(ev.payload.entry.id).toBeDefined();
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('Test 2: coordinator path stores display_name "Coordinator" and actor_kind "coordinator"; actor_id absent', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'chat test' });
+      mgr.postChat({
+        actor_kind: 'coordinator',
+        display_name: 'Coordinator',
+        text: 'Welcome everyone!',
+      });
+      const view = mgr.sessionView();
+      expect(view.chat).toHaveLength(1);
+      const entry = view.chat[0]!;
+      expect(entry.actor_kind).toBe('coordinator');
+      expect(entry.display_name).toBe('Coordinator');
+      expect(entry.text).toBe('Welcome everyone!');
+      // actor_id must not be present (exactOptionalPropertyTypes)
+      expect('actor_id' in entry).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('Test 3: maxChatMessages cap — throws capError BEFORE push+emit when limit reached', () => {
+    const { dir, cleanup } = makeMgr();
+    const events: import('@shared-brainstorm/shared').ServerEvent[] = [];
+    const capMgr = new SessionManager({
+      clock: fixedClock('2026-04-29T12:00:00Z'),
+      broadcast: (e) => { if ('seq' in e) events.push(e as import('@shared-brainstorm/shared').ServerEvent); },
+      transcriptDir: dir,
+      maxChatMessages: 2,
+    });
+    try {
+      capMgr.start({ brief: 'cap test' });
+      capMgr.postChat({ actor_kind: 'coordinator', display_name: 'Coordinator', text: 'msg1' });
+      capMgr.postChat({ actor_kind: 'coordinator', display_name: 'Coordinator', text: 'msg2' });
+      // Now at cap — next call must throw
+      const countBefore = events.filter((e) => e.type === 'chat_added').length;
+      expect(() =>
+        capMgr.postChat({ actor_kind: 'coordinator', display_name: 'Coordinator', text: 'msg3' }),
+      ).toThrow();
+      // No new chat_added emitted after cap throw
+      const countAfter = events.filter((e) => e.type === 'chat_added').length;
+      expect(countAfter).toBe(countBefore);
+      // chat array is still at cap (2) — not 3
+      expect(capMgr.sessionView().chat).toHaveLength(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('Test 4: sessionView().chat returns all posted entries', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'chat test' });
+      mgr.postChat({ actor_kind: 'coordinator', display_name: 'Coordinator', text: 'msg1' });
+      mgr.postChat({ actor_kind: 'coordinator', display_name: 'Coordinator', text: 'msg2' });
+      const chat = mgr.sessionView().chat;
+      expect(chat).toHaveLength(2);
+      expect(chat[0]!.text).toBe('msg1');
+      expect(chat[1]!.text).toBe('msg2');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('Test 5: stop() transcript includes chat at top-level', () => {
+    const { mgr, dir: _dir, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'chat test' });
+      mgr.postChat({ actor_kind: 'coordinator', display_name: 'Coordinator', text: 'transcripted' });
+      const { transcript_path } = mgr.stop('stop_session');
+      const raw = readFileSync(transcript_path, 'utf-8');
+      const parsed = JSON.parse(raw) as unknown;
+      // transcript.chat should contain our message
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyTranscript = parsed as Record<string, unknown>;
+      expect(anyTranscript['chat']).toBeDefined();
+      expect(Array.isArray(anyTranscript['chat'])).toBe(true);
+      const chatArr = anyTranscript['chat'] as { text: string }[];
+      expect(chatArr[0]!.text).toBe('transcripted');
+    } finally {
+      cleanup();
+    }
+  });
+});

@@ -4,6 +4,7 @@ import {
   newQuestionId,
   newSessionId,
   newClarificationId,
+  newChatEntryId,
   type ParticipantId,
   type QuestionId,
   type SessionId,
@@ -44,6 +45,8 @@ export interface SessionManagerOpts {
   maxCommentsPerQuestion?: number;
   /** CHATAI-01: max clarifications per question (total across participants). Default 50. */
   maxClarificationsPerQuestion?: number;
+  /** CHAT-01: max chat messages per session (total). Default 1000. */
+  maxChatMessages?: number;
 }
 
 /**
@@ -414,6 +417,40 @@ export class SessionManager {
   }
 
   /**
+   * CHAT-01: Post a chat message to the session-level chat. Both the coordinator
+   * and approved participants may call this path; actor fields are always
+   * server-derived (anti-spoof — the ClientCommand carries only `text`).
+   *
+   * D-07: cap throw is BEFORE push+emit so cap rejections never enter the
+   * RingBuffer or appear in the transcript.
+   *
+   * Coordinator messages use display_name:'Coordinator' and no actor_id
+   * (exactOptionalPropertyTypes: conditional spread omits the key entirely).
+   */
+  postChat(args: {
+    actor_kind: 'participant' | 'coordinator';
+    actor_id?: string;
+    display_name: string;
+    text: string;
+  }): void {
+    const a = this.requireActive();
+    const limit = this.opts.maxChatMessages ?? 1000;
+    if (a.chat.length >= limit) {
+      throw capError('cap_exceeded:chat', limit, `chat cap reached (${limit} total)`);
+    }
+    const entry: ChatEntry = {
+      id: newChatEntryId() as string,
+      actor_kind: args.actor_kind,
+      ...(args.actor_id !== undefined ? { actor_id: args.actor_id } : {}),
+      display_name: args.display_name,
+      text: args.text,
+      at: this.opts.clock.isoNow(),
+    };
+    a.chat.push(entry);
+    this.emit({ type: 'chat_added', payload: { entry } });
+  }
+
+  /**
    * Record the final answer to the current question and resolve its ticket.
    * Called by the AI host via the MCP `recordAnswer` tool after presenting
    * the team's suggestions/comments to the initiator and getting their pick.
@@ -731,6 +768,7 @@ export class SessionManager {
         clarifications: q.clarifications, // CHATAI-01: include in transcript
         resolution: q.resolution,
       })),
+      chat: a.chat, // CHAT-01: durable session-level chat list
     };
     const path = writeTranscript(transcript, this.opts.transcriptDir);
     this.active = null;

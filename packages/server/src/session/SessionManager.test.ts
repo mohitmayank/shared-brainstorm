@@ -1729,3 +1729,96 @@ describe('postChat', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// WR-01: ticket_to_question pruning on resolve/cancel/timeout
+// ---------------------------------------------------------------------------
+
+describe('WR-01: ticket_to_question pruning', () => {
+  it('setPickingTicket with a resolved ticket_id is a no-op after recordAnswer prunes the entry', () => {
+    // After pruning, ticket_to_question.get(ticket_id) returns undefined.
+    // setPickingTicket guards: if (!qid || ...) return; → silent no-op.
+    // If ticket_to_question were NOT pruned this would remain a "stale open"
+    // entry and future readers could incorrectly treat it as open.
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'pruning' });
+      const { ticket_id } = mgr.askGroup({ question: 'Q1?' });
+      const qid = mgr.currentQuestion()!.id;
+      mgr.recordAnswer({ question_id: qid, value: 'A1', source: 'override' });
+      // After resolve + pruning, setPickingTicket must be a silent no-op.
+      mgr.setPickingTicket(ticket_id); // would throw / misbehave if entry were stale
+      expect(mgr.sessionView().session_status).toBe('waiting');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('answerClarification succeeds after recordAnswer prunes ticket_to_question (terminal fallback)', () => {
+    // This is the key regression guard for WR-01: the dual-lookup in
+    // answerClarification (open_questions first, then terminalQuestions) must
+    // still work after ticket_to_question is pruned on resolve.
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'pruning' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      const q = mgr.currentQuestion()!;
+      mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'What about latency?',
+      });
+      const clId = mgr
+        .snapshot(q.id as import('@shared-brainstorm/shared').QuestionId, false)
+        .clarifications[0]!.clarification_id;
+      // Resolve the question — this prunes ticket_to_question
+      mgr.recordAnswer({
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        value: 'Postgres',
+        source: 'override',
+      });
+      // answerClarification must still find the question via terminalQuestions
+      expect(() =>
+        mgr.answerClarification({ ticket_id, clarification_id: clId, answer_text: 'Sub-1ms' }),
+      ).not.toThrow();
+      const snap = mgr.snapshot(q.id as import('@shared-brainstorm/shared').QuestionId, true);
+      expect(snap.clarifications[0]!.answer).toBe('Sub-1ms');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('cancelAllOpenQuestions prunes ticket_to_question for all cancelled tickets', () => {
+    // After cancel, setPickingTicket on a cancelled ticket is a silent no-op.
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'pruning cancel' });
+      const result = mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+      const t1 = result.tickets[0]!.ticket_id;
+      const t2 = result.tickets[1]!.ticket_id;
+      mgr.cancelAllOpenQuestions('host_cancelled');
+      // Both tickets are now terminal; setPickingTicket is a no-op for each.
+      mgr.setPickingTicket(t1);
+      mgr.setPickingTicket(t2);
+      expect(mgr.sessionView().session_status).toBe('waiting');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('timeoutCurrentQuestion prunes ticket_to_question for all timed-out tickets', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'pruning timeout' });
+      const { ticket_id } = mgr.askGroup({ question: 'Q?' });
+      mgr.timeoutCurrentQuestion();
+      // Ticket is timed out; setPickingTicket is a no-op.
+      mgr.setPickingTicket(ticket_id);
+      expect(mgr.sessionView().session_status).toBe('waiting');
+    } finally {
+      cleanup();
+    }
+  });
+});

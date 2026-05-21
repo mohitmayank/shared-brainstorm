@@ -479,6 +479,11 @@ export class SessionManager {
       payload: { question_id: q.id, resolution: q.resolution },
     });
     a.open_questions.delete(args.question_id); // Phase 6: replaced a.current_question = null
+    // WR-01: prune ticket_to_question so stale entries cannot accumulate for the
+    // session lifetime. answerClarification falls back to terminalQuestions (by
+    // ticket_id scan) when this entry is absent — the dual-lookup does NOT rely
+    // on ticket_to_question for terminal questions, so pruning is safe here.
+    a.ticket_to_question.delete(q.ticket_id);
     // WR-01: only clear pickingTicketId when the resolved ticket IS the one being
     // picked — a sibling resolve must NOT drop the 'choosing' caption for a concurrent pick.
     if (a.pickingTicketId === q.ticket_id) {
@@ -501,6 +506,10 @@ export class SessionManager {
       this.emit({ type: 'question_cancelled', payload: { question_id: q.id, reason } });
     }
     a.open_questions.clear();
+    // WR-01: prune all ticket_to_question entries for now-terminal questions.
+    // cancelAllOpenQuestions clears ALL open questions — clear the map entirely
+    // so no stale entries can accumulate across the session lifetime.
+    a.ticket_to_question.clear();
     a.pickingTicketId = null; // WR-01/WR-03: all questions gone → no pick can be active
     this.setSessionStatus(this.deriveSessionStatus()); // pickingTicketId nulled above → choosing cleared
   }
@@ -525,6 +534,8 @@ export class SessionManager {
       });
     }
     a.open_questions.clear();
+    // WR-01: prune all ticket_to_question entries — mirrors cancelAllOpenQuestions.
+    a.ticket_to_question.clear();
     a.pickingTicketId = null; // WR-01/WR-03: all questions gone → no pick can be active
     this.setSessionStatus(this.deriveSessionStatus()); // pickingTicketId nulled above → choosing cleared
   }

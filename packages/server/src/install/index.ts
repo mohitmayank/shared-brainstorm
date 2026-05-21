@@ -13,16 +13,19 @@ export async function runInstall(host: Host): Promise<void> {
       process.stdout.write(`MCP config written to: ${configPath}\n`);
       process.stdout.write(`Skills copied to:      ${skillPath}\n`);
       process.stdout.write(`\nRestart Claude Code for changes to take effect.\n`);
-      return;
+      break;
     }
     case 'codex':
       await installCodex();
-      return;
+      break;
     case 'opencode':
       await installOpencode();
-      return;
+      break;
     case 'gemini-cli':
       await installGeminiCli();
-      return;
+      break;
   }
+  process.stdout.write(
+    `\nNow ask your agent to brainstorm a decision with your team — e.g. "Postgres or DynamoDB?"\n`,
+  );
 }

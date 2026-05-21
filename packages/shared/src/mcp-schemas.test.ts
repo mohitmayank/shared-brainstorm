@@ -9,6 +9,8 @@ import {
   RecordAnswerInput,
   RecordAnswerOutput,
   StopSessionOutput,
+  ClarificationEntry,
+  AnswerClarificationInput,
 } from './mcp-schemas.js';
 
 describe('MCP schemas', () => {
@@ -84,14 +86,15 @@ describe('MCP schemas', () => {
     expect(AwaitAnswerInput.safeParse({ ticket_id: 'sb_t_a' }).success).toBe(true); // default applied
   });
 
-  it('await_answer output is a snapshot of suggestions + comments + resolved flag', () => {
+  it('await_answer output is a snapshot of suggestions + comments + clarifications + resolved flag', () => {
     expect(
-      AwaitAnswerOutput.safeParse({ suggestions: [], comments: [], resolved: false }).success,
+      AwaitAnswerOutput.safeParse({ suggestions: [], comments: [], clarifications: [], resolved: false }).success,
     ).toBe(true);
     expect(
       AwaitAnswerOutput.safeParse({
         suggestions: [{ participant_name: 'Alice', value: 'A', at: 'x' }],
         comments: [{ participant_name: 'Bob', text: 'looks fine', at: 'y' }],
+        clarifications: [],
         resolved: true,
       }).success,
     ).toBe(true);
@@ -113,5 +116,74 @@ describe('MCP schemas', () => {
 
   it('stop_session output requires transcript_path', () => {
     expect(StopSessionOutput.safeParse({ ok: true, transcript_path: '/x' }).success).toBe(true);
+  });
+});
+
+describe('ClarificationEntry / AnswerClarificationInput schemas', () => {
+  it('ClarificationEntry.parse() with full valid object succeeds', () => {
+    const result = ClarificationEntry.safeParse({
+      participant_name: 'Alice',
+      clarification_id: 'sb_cl_abc',
+      text: 'Why Postgres?',
+      answer: 'Because of ACID compliance.',
+      asked_at: '2026-01-01T00:00:00Z',
+      answered_at: '2026-01-01T00:01:00Z',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.participant_name).toBe('Alice');
+      expect(result.data.answer).toBe('Because of ACID compliance.');
+    }
+  });
+
+  it('ClarificationEntry.parse() with answer/answered_at absent succeeds (optional fields)', () => {
+    const result = ClarificationEntry.safeParse({
+      participant_name: 'Bob',
+      clarification_id: 'sb_cl_xyz',
+      text: 'Any caching?',
+      asked_at: '2026-01-01T00:00:00Z',
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.answer).toBeUndefined();
+      expect(result.data.answered_at).toBeUndefined();
+    }
+  });
+
+  it('AnswerClarificationInput.parse() with valid object succeeds', () => {
+    const result = AnswerClarificationInput.safeParse({
+      ticket_id: 'sb_t_abc',
+      clarification_id: 'sb_cl_xyz',
+      text: 'Use structured logging.',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('AnswerClarificationInput.parse() with empty text fails (min(1) violation)', () => {
+    const result = AnswerClarificationInput.safeParse({
+      ticket_id: 'sb_t_abc',
+      clarification_id: 'sb_cl_xyz',
+      text: '',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('AwaitAnswerOutput.parse() with clarifications: [] succeeds', () => {
+    const result = AwaitAnswerOutput.safeParse({
+      suggestions: [],
+      comments: [],
+      clarifications: [],
+      resolved: false,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('AwaitAnswerOutput.parse() omitting clarifications key fails (required array)', () => {
+    const result = AwaitAnswerOutput.safeParse({
+      suggestions: [],
+      comments: [],
+      resolved: false,
+    });
+    expect(result.success).toBe(false);
   });
 });

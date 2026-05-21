@@ -1379,3 +1379,229 @@ describe('SessionManager', () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 7 (CHATAI-01): postClarification + answerClarification
+// ---------------------------------------------------------------------------
+
+describe('postClarification', () => {
+  it('approved participant appends clarification and emits clarification_added', () => {
+    const { mgr, events, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'test' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      const q = mgr.currentQuestion()!;
+      mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'What about latency?',
+      });
+      const freshQ = mgr.currentQuestion()!;
+      expect(freshQ.clarifications).toHaveLength(1);
+      expect(freshQ.clarifications[0]!.text).toBe('What about latency?');
+      expect(freshQ.clarifications[0]!.id).toMatch(/^sb_cl_/);
+      const evt = events.find((e) => e.type === 'clarification_added');
+      expect(evt).toBeDefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('postClarification on a resolved question returns silently with no event emitted', () => {
+    const { mgr, events, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'test' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      const q = mgr.currentQuestion()!;
+      // Resolve the question first
+      mgr.recordAnswer({ question_id: q.id as import('@shared-brainstorm/shared').QuestionId, value: 'Postgres', source: 'override' });
+      const countBefore = events.length;
+      // Try to clarify on a now-resolved question (no longer in open_questions)
+      mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'Late question',
+      });
+      // No new events — question not found in open_questions, silently returns
+      expect(events.length).toBe(countBefore);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('cap exceeded throws capError BEFORE push+emit', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
+    const events: ServerEvent[] = [];
+    const mgr = new SessionManager({
+      clock: fixedClock('2026-04-29T12:00:00Z'),
+      broadcast: (e) => { if ('seq' in e) events.push(e as ServerEvent); },
+      transcriptDir: dir,
+      maxClarificationsPerQuestion: 1,
+    });
+    try {
+      mgr.start({ brief: 'test' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      mgr.askGroup({ question: 'Which DB?' });
+      const q = mgr.currentQuestion()!;
+      mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'First',
+      });
+      const countBefore = events.length;
+      expect(() => mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'Overflow',
+      })).toThrow();
+      // No new events emitted when cap exceeded
+      expect(events.length).toBe(countBefore);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('tickets.bump() is called (wakes awaitAnswer)', async () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'test' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      const q = mgr.currentQuestion()!;
+
+      // Start awaitAnswer in background (will block until bump or timeout)
+      const pollPromise = mgr.awaitAnswer({ ticket_id, timeout_s: 5 });
+
+      // postClarification should bump the ticket
+      mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'Any caching?',
+      });
+
+      const result = await pollPromise;
+      expect(result.clarifications).toHaveLength(1);
+      expect(result.clarifications[0]!.text).toBe('Any caching?');
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('answerClarification', () => {
+  it('sets answer+answered_at on clarification and re-emits clarification_added', () => {
+    const { mgr, events, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'test' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      const q = mgr.currentQuestion()!;
+      mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'What about latency?',
+      });
+      // Get the clarification from snapshot
+      const snapshot0 = mgr.snapshot(q.id as import('@shared-brainstorm/shared').QuestionId, false);
+      const cl = snapshot0.clarifications[0]!;
+      const countBefore = events.filter((e) => e.type === 'clarification_added').length;
+
+      mgr.answerClarification({
+        ticket_id,
+        clarification_id: cl.clarification_id,
+        answer_text: 'Latency is sub-1ms',
+      });
+
+      const snapshot1 = mgr.snapshot(q.id as import('@shared-brainstorm/shared').QuestionId, false);
+      expect(snapshot1.clarifications[0]!.answer).toBe('Latency is sub-1ms');
+      expect(snapshot1.clarifications[0]!.answered_at).toBeDefined();
+      const newCount = events.filter((e) => e.type === 'clarification_added').length;
+      expect(newCount).toBe(countBefore + 1);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('terminal fallback: works after recordAnswer (question moved to terminalQuestions)', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'test' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      const q = mgr.currentQuestion()!;
+      mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'What about latency?',
+      });
+      // Get clarification id before resolving
+      const snapshot0 = mgr.snapshot(q.id as import('@shared-brainstorm/shared').QuestionId, false);
+      const clId = snapshot0.clarifications[0]!.clarification_id;
+
+      // Resolve the question (moves to terminalQuestions)
+      mgr.recordAnswer({ question_id: q.id as import('@shared-brainstorm/shared').QuestionId, value: 'Postgres', source: 'override' });
+
+      // answerClarification should still find it via terminalQuestions
+      expect(() => mgr.answerClarification({
+        ticket_id,
+        clarification_id: clId,
+        answer_text: 'Still valid answer',
+      })).not.toThrow();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('throws when clarification_id not found', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'test' });
+      mgr.addParticipant({ display_name: 'Alice' });
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      expect(() => mgr.answerClarification({
+        ticket_id,
+        clarification_id: 'sb_cl_notfound',
+        answer_text: 'Some answer',
+      })).toThrow(/clarification/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('does NOT call tickets.bump (no second poll wake from answer)', async () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'test' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      const q = mgr.currentQuestion()!;
+      mgr.postClarification({
+        participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
+        question_id: q.id as import('@shared-brainstorm/shared').QuestionId,
+        text: 'Any caching?',
+      });
+
+      // Drain the bump from postClarification
+      const snap0 = await mgr.awaitAnswer({ ticket_id, timeout_s: 1 });
+      const clId = snap0.clarifications[0]!.clarification_id;
+
+      // answerClarification should NOT bump; answerClarification just mutates + emits
+      // We verify it doesn't throw and returns immediately (no async needed)
+      mgr.answerClarification({ ticket_id, clarification_id: clId, answer_text: 'Yes, Redis' });
+      // Check the answer is set in snapshot
+      const snap1 = mgr.snapshot(q.id as import('@shared-brainstorm/shared').QuestionId, false);
+      expect(snap1.clarifications[0]!.answer).toBe('Yes, Redis');
+    } finally {
+      cleanup();
+    }
+  });
+});

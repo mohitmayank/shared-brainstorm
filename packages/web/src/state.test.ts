@@ -20,6 +20,7 @@ const welcomeEphemeral: AnyFrame = {
       current_question: null,
       locked: false,
       session_status: 'waiting' as const,
+      chat: [], // CHATAI-01 / CHAT-01
     },
     you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
     is_coordinator: false,
@@ -47,6 +48,7 @@ describe('reduce — isCoordinator', () => {
     current_question: null,
     locked: false,
     session_status: 'waiting' as const,
+    chat: [] as never[], // CHATAI-01 / CHAT-01
   };
 
   const coordinatorWelcome: AnyFrame = {
@@ -162,6 +164,7 @@ describe('reduce — seq guard (WR-07: idempotent replay)', () => {
         status: 'broadcast',
         suggestions: [],
         comments: [],
+        clarifications: [], // CHATAI-01
         resolution: null,
       },
     },
@@ -397,6 +400,7 @@ describe('reduce — question lifecycle', () => {
         status: 'broadcast',
         suggestions: [],
         comments: [],
+        clarifications: [], // CHATAI-01
         resolution: null,
       },
     },
@@ -436,6 +440,7 @@ describe('reduce — roomLocked from welcome (WR-01)', () => {
     questions: [] as never[], // Phase 6 (BATCH-02)
     current_question: null,
     session_status: 'waiting' as const,
+    chat: [] as never[], // CHATAI-01 / CHAT-01
   };
 
   it('ephemeral welcome with locked:true sets roomLocked true', () => {
@@ -574,6 +579,7 @@ describe('reduce — participant_status_changed (Phase 4 / CR-02 regression)', (
           current_question: null,
           locked: false,
           session_status: 'waiting' as const,
+          chat: [] as never[], // CHATAI-01 / CHAT-01
         },
         you: {
           id: 'sb_p_001',
@@ -691,6 +697,7 @@ describe('reduce — sessionStatus (Phase 5 / PRES-01)', () => {
       current_question: null,
       locked: false,
       session_status: 'choosing' as const,
+      chat: [] as never[], // CHATAI-01 / CHAT-01
     };
     const evt: AnyFrame = {
       type: 'welcome',
@@ -732,6 +739,7 @@ describe('reduce — sessionStatus (Phase 5 / PRES-01)', () => {
           current_question: null,
           locked: false,
           session_status: 'question_open' as const,
+          chat: [] as never[], // CHATAI-01 / CHAT-01
         },
         you: { id: 'sb_p_001', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const },
         is_coordinator: false,
@@ -1074,6 +1082,7 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
         status: 'broadcast' as const,
         suggestions: [],
         comments: [],
+        clarifications: [], // CHATAI-01
         resolution: null,
       },
     },
@@ -1092,6 +1101,7 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
         status: 'broadcast' as const,
         suggestions: [],
         comments: [],
+        clarifications: [], // CHATAI-01
         resolution: null,
       },
     },
@@ -1126,6 +1136,7 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
           status: 'broadcast' as const,
           suggestions: [],
           comments: [],
+          clarifications: [], // CHATAI-01
           resolution: null,
         },
       },
@@ -1251,6 +1262,7 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
               status: 'broadcast' as const,
               suggestions: [],
               comments: [],
+              clarifications: [], // CHATAI-01
               resolution: null,
             },
             {
@@ -1261,12 +1273,14 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
               status: 'broadcast' as const,
               suggestions: [],
               comments: [],
+              clarifications: [], // CHATAI-01
               resolution: null,
             },
           ],
           current_question: null,
           locked: false,
           session_status: 'question_open' as const,
+          chat: [] as never[], // CHATAI-01 / CHAT-01
         },
         is_coordinator: false,
       },
@@ -1298,12 +1312,14 @@ describe('Phase 6: questions[] accumulation (BATCH-02)', () => {
               status: 'broadcast' as const,
               suggestions: [],
               comments: [],
+              clarifications: [], // CHATAI-01
               resolution: null,
             },
           ],
           current_question: null,
           locked: false,
           session_status: 'question_open' as const,
+          chat: [] as never[], // CHATAI-01 / CHAT-01
         },
         is_coordinator: false,
       },

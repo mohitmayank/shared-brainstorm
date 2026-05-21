@@ -13,6 +13,8 @@ import {
   RecordAnswerInput,
   RecordAnswerOutput,
   StopSessionOutput,
+  AnswerClarificationInput,
+  AnswerClarificationOutput,
 } from '@shared-brainstorm/shared';
 import type { QuestionId, ServerEvent } from '@shared-brainstorm/shared';
 import { SessionManager } from '../session/SessionManager.js';
@@ -395,6 +397,26 @@ export function recordAnswer(raw: unknown): RecordAnswerOutput {
     source: input.source,
   });
   return RecordAnswerOutput.parse({ ok: true });
+}
+
+// ---------------------------------------------------------------------------
+// answerClarification (CHATAI-01)
+// ---------------------------------------------------------------------------
+
+/**
+ * 6th MCP tool: AI host records an answer to a participant's clarification.
+ * Finds the question via `ticket_id`, sets `answer` + `answered_at` on the
+ * matching clarification, and re-emits `clarification_added` for browser upsert.
+ */
+export function answerClarification(raw: unknown): AnswerClarificationOutput {
+  if (!mcpState.manager) throw new Error('No active session. Call startSession first.');
+  const input = AnswerClarificationInput.parse(raw);
+  mcpState.manager.answerClarification({
+    ticket_id: input.ticket_id,
+    clarification_id: input.clarification_id,
+    answer_text: input.text,
+  });
+  return AnswerClarificationOutput.parse({ ok: true });
 }
 
 // ---------------------------------------------------------------------------

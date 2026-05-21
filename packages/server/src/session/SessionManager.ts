@@ -3,6 +3,7 @@ import {
   newParticipantId,
   newQuestionId,
   newSessionId,
+  newClarificationId,
   type ParticipantId,
   type QuestionId,
   type SessionId,
@@ -14,6 +15,8 @@ import {
   type EphemeralFrame,
   type Participant,
   type Question,
+  type Clarification,
+  type ChatEntry,
   type SessionView,
   type SessionStatus,
   type Transcript,
@@ -39,6 +42,8 @@ export interface SessionManagerOpts {
   maxSuggestionsPerParticipantPerQuestion?: number;
   /** REL-07 / D-05: max comments per question (total across participants). Default 100. */
   maxCommentsPerQuestion?: number;
+  /** CHATAI-01: max clarifications per question (total across participants). Default 50. */
+  maxClarificationsPerQuestion?: number;
 }
 
 /**
@@ -87,6 +92,8 @@ interface ActiveSession {
    * and coordinator disconnect clears it so the caption can never stick.
    */
   pickingTicketId: string | null;
+  /** CHATAI-01 / CHAT-01: durable session-level chat. */
+  chat: ChatEntry[];
 }
 
 /**
@@ -134,6 +141,7 @@ export class SessionManager {
       open_questions: new Map<QuestionId, Question>(),
       ticket_to_question: new Map(),
       pickingTicketId: null,
+      chat: [],
     };
     return { session_id };
   }
@@ -205,6 +213,7 @@ export class SessionManager {
       status: 'broadcast',
       suggestions: [],
       comments: [],
+      clarifications: [],
       resolution: null,
     };
     a.open_questions.set(q.id, q); // Phase 6: replaced a.current_question = q
@@ -331,6 +340,80 @@ export class SessionManager {
   }
 
   /**
+   * CHATAI-01: Approved participant asks a clarifying question on a specific open
+   * question. Emits `clarification_added` and bumps the ticket so `awaitAnswer`
+   * surfaces it in the `clarifications[]` array on the next poll.
+   *
+   * Silently returns (no-op) if the question is not in 'broadcast' status so
+   * that late messages after resolve/cancel are safely discarded.
+   *
+   * D-07: cap throw is BEFORE push+emit so cap rejections never enter RingBuffer.
+   */
+  postClarification(args: {
+    participant_id: ParticipantId;
+    question_id: QuestionId;
+    text: string;
+  }): void {
+    const a = this.requireActive();
+    const q = a.open_questions.get(args.question_id);
+    if (!q || q.status !== 'broadcast') return;
+    if (!a.participants.has(args.participant_id)) return;
+    // CHATAI-01 / D-07: cap BEFORE push+emit
+    const limit = this.opts.maxClarificationsPerQuestion ?? 50;
+    if (q.clarifications.length >= limit) {
+      throw capError(
+        'cap_exceeded:clarifications',
+        limit,
+        `clarification cap reached for question (${limit} total)`,
+      );
+    }
+    const cl: Clarification = {
+      id: newClarificationId() as string,
+      participant_id: args.participant_id,
+      text: args.text,
+      asked_at: this.opts.clock.isoNow(),
+    };
+    q.clarifications.push(cl);
+    this.emit({ type: 'clarification_added', payload: { question_id: q.id, clarification: cl } });
+    this.tickets.bump(q.ticket_id);
+  }
+
+  /**
+   * CHATAI-01: AI host records an answer to a clarification. Finds the question
+   * by `ticket_id` in `open_questions` first, then falls back to `terminalQuestions`
+   * (dual-lookup so the AI can answer even after recordAnswer is called on the
+   * same question). Sets `answer` + `answered_at` on the clarification and re-emits
+   * `clarification_added` so the browser upserts the entry by id.
+   *
+   * Does NOT call `tickets.bump` — answering a clarification should not prematurely
+   * wake a pending `awaitAnswer` poll.
+   *
+   * Throws if the clarification_id is not found on the question.
+   */
+  answerClarification(args: {
+    ticket_id: string;
+    clarification_id: string;
+    answer_text: string;
+  }): void {
+    const a = this.requireActive();
+    const qid = a.ticket_to_question.get(args.ticket_id);
+    const q =
+      (qid !== undefined ? a.open_questions.get(qid) : undefined) ??
+      this.terminalQuestions.find((t) => t.ticket_id === args.ticket_id);
+    if (!q) throw new Error(`answerClarification: no question for ticket ${args.ticket_id}`);
+    const cl = q.clarifications.find((c) => c.id === args.clarification_id);
+    if (!cl) {
+      throw new Error(
+        `answerClarification: clarification ${args.clarification_id} not found on question ${q.id}`,
+      );
+    }
+    cl.answer = args.answer_text;
+    cl.answered_at = this.opts.clock.isoNow();
+    this.emit({ type: 'clarification_added', payload: { question_id: q.id, clarification: cl } });
+    // NOTE: no tickets.bump — answering a clarification must not prematurely wake awaitAnswer
+  }
+
+  /**
    * Record the final answer to the current question and resolve its ticket.
    * Called by the AI host via the MCP `recordAnswer` tool after presenting
    * the team's suggestions/comments to the initiator and getting their pick.
@@ -420,7 +503,7 @@ export class SessionManager {
     const a = this.requireActive();
     const qid = a.ticket_to_question.get(input.ticket_id);
     if (!qid) {
-      return { suggestions: [], comments: [], resolved: false };
+      return { suggestions: [], comments: [], clarifications: [], resolved: false };
     }
     const signal = await this.tickets.waitFor(input.ticket_id, input.timeout_s * 1000);
     return this.snapshot(qid, signal === 'resolved');
@@ -432,7 +515,7 @@ export class SessionManager {
     const q =
       a.open_questions.get(questionId) ?? // Phase 6: check open_questions map first
       this.terminalQuestions.find((t) => t.id === questionId);
-    if (!q) return { suggestions: [], comments: [], resolved };
+    if (!q) return { suggestions: [], comments: [], clarifications: [], resolved };
     const nameFor = (pid: ParticipantId): string =>
       a.participants.get(pid)?.display_name ?? 'unknown';
     return {
@@ -446,6 +529,15 @@ export class SessionManager {
         participant_name: nameFor(c.participant_id),
         text: c.text,
         at: c.at,
+      })),
+      // CHATAI-01: map Clarification[] → ClarificationEntry[] for the MCP wire shape
+      clarifications: q.clarifications.map((cl) => ({
+        participant_name: nameFor(cl.participant_id),
+        clarification_id: cl.id,
+        text: cl.text,
+        ...(cl.answer !== undefined ? { answer: cl.answer } : {}),
+        asked_at: cl.asked_at,
+        ...(cl.answered_at !== undefined ? { answered_at: cl.answered_at } : {}),
       })),
       resolved,
     };
@@ -583,6 +675,7 @@ export class SessionManager {
       current_question: questions[0] ?? null, // Phase 6: derived back-compat field
       locked: a.locked,
       session_status: a.session_status,
+      chat: a.chat, // CHATAI-01 / CHAT-01: durable session-level chat (seeded in welcome)
     };
   }
 
@@ -635,6 +728,7 @@ export class SessionManager {
         status: q.status as 'resolved' | 'cancelled' | 'timeout',
         suggestions: q.suggestions,
         comments: q.comments,
+        clarifications: q.clarifications, // CHATAI-01: include in transcript
         resolution: q.resolution,
       })),
     };

@@ -35,6 +35,7 @@ export const TranscriptV2 = z.object({
       status: z.enum(['resolved', 'cancelled', 'timeout']),
       suggestions: z.array(z.unknown()),
       comments: z.array(z.unknown()),
+      clarifications: z.array(z.unknown()).optional(), // CHATAI-01: additive optional for back-compat
       resolution: z
         .object({
           value: z.string(),

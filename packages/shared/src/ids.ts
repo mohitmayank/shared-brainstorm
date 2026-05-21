@@ -14,10 +14,15 @@ function mint(prefix: string, len = 16): string {
   return `${prefix}${out}`;
 }
 
+export type ClarificationId = string & { readonly __brand: 'ClarificationId' };
+export type ChatEntryId = string & { readonly __brand: 'ChatEntryId' };
+
 export const newSessionId = (): SessionId => mint('sb_s_') as SessionId;
 export const newTicketId = (): TicketId => mint('sb_t_') as TicketId;
 export const newQuestionId = (): QuestionId => mint('sb_q_') as QuestionId;
 export const newParticipantId = (): ParticipantId => mint('sb_p_') as ParticipantId;
+export const newClarificationId = (): ClarificationId => mint('sb_cl_') as ClarificationId;
+export const newChatEntryId = (): ChatEntryId => mint('sb_ch_') as ChatEntryId;
 
 /**
  * High-entropy coordinator token. Empty prefix + length 22 yields 22 chars of

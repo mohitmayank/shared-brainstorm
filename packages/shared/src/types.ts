@@ -22,6 +22,26 @@ export interface Comment {
   at: string;
 }
 
+/** Phase 7 (CHATAI-01): a clarifying question from a participant with an optional AI answer. */
+export interface Clarification {
+  id: string;
+  participant_id: ParticipantId;
+  text: string;
+  answer?: string;
+  asked_at: string;
+  answered_at?: string;
+}
+
+/** Phase 7 (CHAT-01): a single message in the session-level room chat. */
+export interface ChatEntry {
+  id: string;
+  actor_kind: 'participant' | 'coordinator';
+  actor_id?: string; // undefined for coordinator (no participant identity)
+  display_name: string;
+  text: string;
+  at: string;
+}
+
 export interface QuestionOption {
   label: string;
   description?: string;
@@ -39,6 +59,7 @@ export interface Question {
   status: 'broadcast' | 'resolved' | 'cancelled' | 'timeout';
   suggestions: Suggestion[];
   comments: Comment[];
+  clarifications: Clarification[];
   resolution: { value: string; source: AnswerSource; recorded_at: string } | null;
 }
 
@@ -54,4 +75,6 @@ export interface SessionView {
   current_question: Question | null; // derived back-compat = questions[0] ?? null
   locked: boolean;
   session_status: SessionStatus;
+  /** Phase 7 (CHAT-01): durable session-level chat list (seeded via welcome for late-joiners). */
+  chat: ChatEntry[];
 }

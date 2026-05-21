@@ -656,3 +656,59 @@ describe('WS heartbeat', () => {
     router.closeAll('test');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 7 (CHATAI-01): post_clarification command gate
+// ---------------------------------------------------------------------------
+
+describe('post_clarification command', () => {
+  it('coordinator (me===null) is silently ignored — no clarification appended', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'Which DB?' });
+    const conn = await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    const q = mgr.currentQuestion()!;
+    conn.handle({ type: 'post_clarification', question_id: q.id, text: 'can coordinator clarify?' });
+    expect(q.clarifications).toHaveLength(0);
+  });
+
+  it('pending participant is silently ignored — no clarification appended', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'Which DB?' });
+    const p = mgr.addParticipant({ display_name: 'Bob' });
+    // p is pending — NOT approved
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    const q = mgr.currentQuestion()!;
+    conn.handle({ type: 'post_clarification', question_id: q.id, text: 'pending clarification' });
+    expect(q.clarifications).toHaveLength(0);
+  });
+
+  it('approved participant appends clarification via postClarification', async () => {
+    const { router, mgr } = setup();
+    mgr.askGroup({ question: 'Which DB?' });
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    mgr.approveParticipant(p.id);
+    const conn = await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: () => {},
+      close: () => {},
+    });
+    if (conn.kind !== 'ok') throw new Error('expected ok');
+    const q = mgr.currentQuestion()!;
+    conn.handle({ type: 'post_clarification', question_id: q.id, text: 'What about latency?' });
+    expect(q.clarifications).toHaveLength(1);
+    expect(q.clarifications[0]!.text).toBe('What about latency?');
+  });
+});

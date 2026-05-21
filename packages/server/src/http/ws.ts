@@ -206,6 +206,25 @@ export function createWsRouter({
               text: c.text,
             });
             return;
+          case 'post_clarification':
+            // CHATAI-01 / anti-spoof gate: coordinator has no participant identity
+            // (me === null) — silently ignore so the coordinator cannot inject a
+            // clarification under a fabricated participant_id.
+            if (!me) return;
+            {
+              const freshCl = manager.sessionView().participants.find((x) => x.id === me.id);
+              if (freshCl?.status !== 'approved') return;
+            }
+            manager.postClarification({
+              participant_id: me.id as Parameters<typeof manager.postClarification>[0]['participant_id'],
+              question_id: c.question_id as Parameters<typeof manager.postClarification>[0]['question_id'],
+              text: c.text,
+            });
+            return;
+          // NOTE: case 'post_chat' handler is NOT added here — ships in Plan 07-02
+          // alongside SessionManager.postChat(). The wire schema is present in
+          // ClientCommand (events.ts) for forward-compat, but the runtime handler
+          // lives in the next plan to keep 07-01 focused on CHATAI-01.
           case 'pong':
             sub.lastSeen = Date.now();
             return;

@@ -10,6 +10,7 @@ import {
   askGroup,
   awaitAnswer,
   recordAnswer,
+  answerClarification,
   stopSession,
 } from './tools.js';
 
@@ -107,6 +108,32 @@ export const TOOLS = [
     },
   },
   {
+    name: 'answerClarification',
+    description:
+      'Record the AI host\'s answer to a participant\'s clarifying question. ' +
+      'Finds the clarification by `clarification_id` on the question identified by `ticket_id`, ' +
+      'sets the answer text, and re-emits `clarification_added` so the browser updates in real time. ' +
+      'Call this when a participant has asked a clarification via the "Ask the AI" input on the question card.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        ticket_id: {
+          type: 'string',
+          description: 'The ticket_id of the question that has the clarification.',
+        },
+        clarification_id: {
+          type: 'string',
+          description: 'The clarification_id surfaced in the awaitAnswer clarifications[] array.',
+        },
+        text: {
+          type: 'string',
+          description: 'The AI answer to the clarification (1–4000 characters).',
+        },
+      },
+      required: ['ticket_id', 'clarification_id', 'text'],
+    },
+  },
+  {
     name: 'stopSession',
     description: 'End the active session, write the transcript, and clean up resources.',
     inputSchema: {
@@ -148,6 +175,10 @@ export function runMcpStdio(): void {
         }
         case 'recordAnswer': {
           const result = recordAnswer(raw);
+          return textContent(JSON.stringify(result));
+        }
+        case 'answerClarification': {
+          const result = answerClarification(raw);
           return textContent(JSON.stringify(result));
         }
         case 'stopSession': {

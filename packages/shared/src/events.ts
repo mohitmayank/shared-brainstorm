@@ -27,6 +27,26 @@ const CommentSchema = z.object({
   at: z.string(),
 });
 
+/** Phase 7 (CHATAI-01): wire schema for a Clarification (ask + optional AI answer). */
+const ClarificationSchema = z.object({
+  id: z.string(),
+  participant_id: z.string(),
+  text: z.string(),
+  answer: z.string().optional(),
+  asked_at: z.string(),
+  answered_at: z.string().optional(),
+});
+
+/** Phase 7 (CHAT-01): wire schema for a ChatEntry. */
+const ChatEntrySchema = z.object({
+  id: z.string(),
+  actor_kind: z.enum(['participant', 'coordinator']),
+  actor_id: z.string().optional(),
+  display_name: z.string(),
+  text: z.string(),
+  at: z.string(),
+});
+
 const ResolutionSchema = z.object({
   value: z.string(),
   source: z.enum(['suggestion', 'synthesis', 'override']),
@@ -43,6 +63,7 @@ const QuestionSchema = z.object({
   status: z.enum(['broadcast', 'resolved', 'cancelled', 'timeout']),
   suggestions: z.array(SuggestionSchema),
   comments: z.array(CommentSchema),
+  clarifications: z.array(ClarificationSchema),
   resolution: ResolutionSchema.nullable(),
 });
 
@@ -57,6 +78,7 @@ const SessionViewSchema = z.object({
   current_question: QuestionSchema.nullable(), // retained back-compat = questions[0] ?? null
   locked: z.boolean(),
   session_status: z.enum(['waiting', 'question_open', 'choosing', 'done']),
+  chat: z.array(ChatEntrySchema), // Phase 7 (CHAT-01): durable session-level chat
 });
 
 const Envelope = <P extends z.ZodTypeAny>(type: string, payload: P) =>
@@ -82,6 +104,15 @@ export const ServerEvent = z.discriminatedUnion('type', [
   Envelope('suggestion_added', z.object({ question_id: z.string(), suggestion: SuggestionSchema })),
   Envelope('suggestion_updated', z.object({ question_id: z.string(), suggestion: SuggestionSchema })),
   Envelope('comment_added', z.object({ question_id: z.string(), comment: CommentSchema })),
+  /** Phase 7 (CHATAI-01): fires when a participant asks a clarification OR when the AI answers. */
+  Envelope('clarification_added', z.object({
+    question_id: z.string(),
+    clarification: ClarificationSchema,
+  })),
+  /** Phase 7 (CHAT-01): fires when a participant or coordinator posts a chat message. */
+  Envelope('chat_added', z.object({
+    entry: ChatEntrySchema,
+  })),
   Envelope(
     'question_resolved',
     z.object({
@@ -151,6 +182,17 @@ export const ClientCommand = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('post_comment'),
     question_id: z.string(),
+    text: z.string().min(1).max(4000),
+  }),
+  /** Phase 7 (CHATAI-01): approved participants ask a clarification on a specific question. */
+  z.object({
+    type: z.literal('post_clarification'),
+    question_id: z.string(),
+    text: z.string().min(1).max(4000),
+  }),
+  /** Phase 7 (CHAT-01): approved participants OR coordinator post to the session chat. */
+  z.object({
+    type: z.literal('post_chat'),
     text: z.string().min(1).max(4000),
   }),
   z.object({ type: z.literal('pong') }),

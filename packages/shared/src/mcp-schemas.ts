@@ -100,9 +100,32 @@ export const CommentEntry = z.object({
 });
 export type CommentEntry = z.infer<typeof CommentEntry>;
 
+/** Phase 7 (CHATAI-01): MCP wire shape for a single clarification (ask + optional AI answer). */
+export const ClarificationEntry = z.object({
+  participant_name: z.string(),
+  clarification_id: z.string(),
+  text: z.string(),
+  answer: z.string().optional(),
+  asked_at: z.string(),
+  answered_at: z.string().optional(),
+});
+export type ClarificationEntry = z.infer<typeof ClarificationEntry>;
+
+/** Phase 7 (CHATAI-01): input for the answerClarification MCP tool. */
+export const AnswerClarificationInput = z.object({
+  ticket_id: z.string(),
+  clarification_id: z.string(),
+  text: z.string().min(1).max(4000),
+});
+export type AnswerClarificationInput = z.infer<typeof AnswerClarificationInput>;
+
+export const AnswerClarificationOutput = z.object({ ok: z.literal(true) });
+export type AnswerClarificationOutput = z.infer<typeof AnswerClarificationOutput>;
+
 export const AwaitAnswerOutput = z.object({
   suggestions: z.array(SuggestionEntry),
   comments: z.array(CommentEntry),
+  clarifications: z.array(ClarificationEntry), // Phase 7 (CHATAI-01): additive
   resolved: z.boolean(),
 });
 export type AwaitAnswerOutput = z.infer<typeof AwaitAnswerOutput>;

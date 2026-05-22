@@ -288,7 +288,10 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
       <div aria-live="polite" aria-relevant="additions text">
         {openQuestions.length > 0 ? (
           <div data-testid="batch-question-list">
-            {openQuestions.length > 1 && (
+            {/* Gate the hint on UNRESOLVED questions only — once a batch is partially
+                resolved, resolved cards stay in openQuestions (flip-in-place), so
+                counting all of them would keep the hint up after only one remains open. */}
+            {openQuestions.filter((q) => q.status === 'broadcast').length > 1 && (
               <p className="muted batch-hint" data-testid="batch-hint" role="note">
                 Resolve each question independently — picking one won't affect the others.
               </p>

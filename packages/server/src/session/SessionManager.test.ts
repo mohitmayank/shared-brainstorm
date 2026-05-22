@@ -1391,7 +1391,7 @@ describe('postClarification', () => {
       mgr.start({ brief: 'test' });
       const p = mgr.addParticipant({ display_name: 'Alice' });
       mgr.approveParticipant(p.id);
-      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      mgr.askGroup({ question: 'Which DB?' });
       const q = mgr.currentQuestion()!;
       mgr.postClarification({
         participant_id: p.id as import('@shared-brainstorm/shared').ParticipantId,
@@ -1415,7 +1415,7 @@ describe('postClarification', () => {
       mgr.start({ brief: 'test' });
       const p = mgr.addParticipant({ display_name: 'Alice' });
       mgr.approveParticipant(p.id);
-      const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+      mgr.askGroup({ question: 'Which DB?' });
       const q = mgr.currentQuestion()!;
       // Resolve the question first
       mgr.recordAnswer({ question_id: q.id as import('@shared-brainstorm/shared').QuestionId, value: 'Postgres', source: 'override' });

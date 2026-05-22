@@ -397,7 +397,11 @@ export function App() {
       },
     });
     wsRef.current = handle;
-  }, []);
+    // Both deps are referentially stable — `applyPresenceTimerPlan` is a
+    // useCallback([]) reading only refs, and `coordinatorMode` is fixed at mount
+    // — so listing them keeps the rule honest without recreating the socket
+    // closure on every render (the ref-mirror pattern is preserved).
+  }, [applyPresenceTimerPlan, coordinatorMode]);
 
   startWsRef.current = startWs;
 

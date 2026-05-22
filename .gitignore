@@ -24,6 +24,9 @@ packages/server/skills/
 packages/server/README.md
 packages/server/LICENSE
 
+# Local agent instructions (not tracked)
+CLAUDE.md
+
 # Playwright E2E artifacts
 test-results/
 e2e/test-results/

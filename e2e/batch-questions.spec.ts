@@ -156,9 +156,17 @@ test('batch two questions: participant answers Q2 before Q1; coordinator resolve
     await coordinatorQ2Card.getByRole('radio').first().check();
     await coordinatorQ2Card.getByTestId('coordinator-record-suggestion').click();
 
-    // Q2 resolves: decision appears in the Decisions panel (question_resolved removes
-    // Q2 from questions[] and adds it to decisions[]; the card folds into decisions)
+    // Q2 resolves: the reducer marks Q2 status='resolved' IN PLACE (it is NOT removed
+    // from questions[]); the card flips to its resolved variant and the answer also
+    // surfaces in the Decisions panel.
     await expect(coordinator.getByText(/Answer for Q2/)).toBeVisible({ timeout: 10_000 });
+
+    // The resolved Q2 card stays mounted and shows the coordinator-resolved-marker
+    // ("✓ Decided") — verifies the resolved variant renders in the batch context, not
+    // just the single-question path (coordinator-flow.spec.ts).
+    await expect(
+      coordinatorQ2Card.getByTestId('coordinator-resolved-marker'),
+    ).toBeAttached({ timeout: 10_000 });
 
     // Q2 progress element is gone (resolved card no longer shows the progress line)
     await expect(

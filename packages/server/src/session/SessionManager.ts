@@ -312,6 +312,60 @@ export class SessionManager {
     this.tickets.bump(q.ticket_id);
   }
 
+  /**
+   * Coordinator-as-planner: the coordinator contributes their own answer as an
+   * attributed suggestion in the pool, mirroring {@link postSuggestion} but with
+   * server-derived identity (the same anti-spoof posture as {@link postChat}):
+   *   - NO `participants.has(...)` guard (the coordinator is not a roster member),
+   *   - reserved synthetic `participant_id: 'coordinator'`,
+   *   - stamps `author_kind:'coordinator'` + `display_name:'Coordinator'`,
+   *   - dedups by the `'coordinator'` id (resubmit updates the single coordinator
+   *     suggestion, never a second entry),
+   *   - emits the EXISTING `suggestion_added` / `suggestion_updated` events and
+   *     bumps the ticket (no new WS event type),
+   *   - is exempt from the per-participant suggestion cap.
+   *
+   * Silently returns (no throw, no emit) when the question is missing or not in
+   * 'broadcast' status, matching {@link postSuggestion}.
+   */
+  postCoordinatorSuggestion(args: {
+    question_id: QuestionId;
+    value: string;
+    rationale?: string;
+  }): void {
+    const a = this.requireActive();
+    const q = a.open_questions.get(args.question_id);
+    if (!q || q.status !== 'broadcast') return;
+    // Reserved synthetic id for coordinator-authored suggestions. Cast to the
+    // ParticipantId brand the same way other synthetic ids are handled here.
+    const coordinatorId = 'coordinator' as ParticipantId;
+    const existing = q.suggestions.find((s) => s.participant_id === coordinatorId);
+    if (existing) {
+      existing.value = args.value;
+      if (args.rationale !== undefined) existing.rationale = args.rationale;
+      else delete existing.rationale;
+      existing.at = this.opts.clock.isoNow();
+      this.emit({
+        type: 'suggestion_updated',
+        payload: { question_id: q.id, suggestion: existing },
+      });
+      this.tickets.bump(q.ticket_id);
+      return;
+    }
+    const sug = {
+      id: `s_${q.suggestions.length + 1}`,
+      participant_id: coordinatorId,
+      value: args.value,
+      ...(args.rationale !== undefined ? { rationale: args.rationale } : {}),
+      at: this.opts.clock.isoNow(),
+      author_kind: 'coordinator' as const,
+      display_name: 'Coordinator',
+    };
+    q.suggestions.push(sug);
+    this.emit({ type: 'suggestion_added', payload: { question_id: q.id, suggestion: sug } });
+    this.tickets.bump(q.ticket_id);
+  }
+
   postComment(args: {
     participant_id: ParticipantId;
     question_id: QuestionId;
@@ -580,7 +634,13 @@ export class SessionManager {
       a.participants.get(pid)?.display_name ?? 'unknown';
     return {
       suggestions: q.suggestions.map((s) => ({
-        participant_name: nameFor(s.participant_id),
+        // Coordinator-as-planner: a coordinator-authored suggestion has no roster
+        // entry — resolve its name from the embedded display_name (so MCP
+        // awaitAnswer attributes it as 'Coordinator', not 'unknown').
+        participant_name:
+          s.author_kind === 'coordinator'
+            ? (s.display_name ?? 'Coordinator')
+            : nameFor(s.participant_id),
         value: s.value,
         ...(s.rationale !== undefined ? { rationale: s.rationale } : {}),
         at: s.at,

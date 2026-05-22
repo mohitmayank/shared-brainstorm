@@ -18,6 +18,13 @@ const SuggestionSchema = z.object({
   value: z.string(),
   rationale: z.string().optional(),
   at: z.string(),
+  // Coordinator-as-planner (additive, backwards-compatible): when a coordinator
+  // contributes their own answer, the suggestion carries server-derived identity
+  // (author_kind:'coordinator', display_name:'Coordinator') with no roster entry.
+  // Absent ⇒ a normal participant suggestion. Existing v2.x frames/transcripts
+  // omit both fields and stay valid.
+  author_kind: z.enum(['participant', 'coordinator']).optional(),
+  display_name: z.string().optional(),
 });
 
 const CommentSchema = z.object({

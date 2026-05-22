@@ -13,6 +13,10 @@ export interface Suggestion {
   value: string;
   rationale?: string;
   at: string;
+  // Coordinator-as-planner: server-derived attribution for a coordinator-authored
+  // suggestion (no roster entry). Absent ⇒ a participant suggestion.
+  author_kind?: 'participant' | 'coordinator';
+  display_name?: string;
 }
 
 export interface Comment {

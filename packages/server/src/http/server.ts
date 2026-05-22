@@ -48,6 +48,15 @@ const CoordinatorAnswerBody = z.object({
   source: z.enum(['suggestion', 'synthesis', 'override']),
 });
 
+// Coordinator-as-planner: the coordinator contributes their own answer as a
+// suggestion in the pool (not an immediate finalize). No `source` — it lands as
+// a regular suggestion and is picked later via the existing answer route.
+const CoordinatorSuggestionBody = z.object({
+  ticket_id: z.string(),
+  value: z.string().min(1).max(2000),
+  rationale: z.string().max(2000).optional(),
+});
+
 const ApproveBody = z.object({ participant_id: z.string() });
 const KickBody = z.object({ participant_id: z.string() });
 const LockBody = z.object({ locked: z.boolean() });
@@ -277,6 +286,39 @@ export function buildApp({
       }
       throw e;
     }
+  });
+
+  // Coordinator-as-planner: the coordinator seeds the suggestion pool with their
+  // own answer. Gated by `requireCoordinator` (sb_c cookie), NOT rate-limited
+  // (privileged, same posture as /api/coordinator/answer). Reuses the same
+  // ticket_id→question lookup and 404/409/session_ended handling, but calls
+  // `postCoordinatorSuggestion` instead of `recordAnswer` — the question stays
+  // open; the coordinator picks the final answer later via /api/coordinator/answer.
+  app.post('/api/coordinator/suggestion', requireCoordinator, async (c) => {
+    const parsed = CoordinatorSuggestionBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid' }, 400);
+    let cq: ReturnType<typeof manager.sessionView>['questions'][number] | undefined;
+    try {
+      cq = manager.sessionView().questions.find((q) => q.ticket_id === parsed.data.ticket_id);
+    } catch {
+      return c.json({ error: 'session_ended' }, 404);
+    }
+    if (!cq) {
+      try {
+        if (manager.isTerminalTicket(parsed.data.ticket_id)) {
+          return c.json({ error: 'already_resolved' }, 409);
+        }
+      } catch {
+        return c.json({ error: 'session_ended' }, 404);
+      }
+      return c.json({ error: 'ticket_not_found' }, 404);
+    }
+    manager.postCoordinatorSuggestion({
+      question_id: cq.id as QuestionId,
+      value: parsed.data.value,
+      ...(parsed.data.rationale !== undefined ? { rationale: parsed.data.rationale } : {}),
+    });
+    return c.json({ ok: true });
   });
 
   // Phase 4: coordinator approve/kick/lock endpoints

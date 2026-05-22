@@ -316,6 +316,104 @@ describe('SessionManager', () => {
     }
   });
 
+  // Coordinator-as-planner: postCoordinatorSuggestion
+  it('postCoordinatorSuggestion adds an attributed suggestion and emits suggestion_added', () => {
+    const { mgr, events, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'a' });
+      mgr.askGroup({ question: 'q?' });
+      const q = mgr.currentQuestion()!;
+      mgr.postCoordinatorSuggestion({ question_id: q.id, value: 'use JWT', rationale: 'simple' });
+      expect(q.suggestions).toHaveLength(1);
+      const sug = q.suggestions[0]!;
+      expect(sug.participant_id).toBe('coordinator');
+      expect(sug.author_kind).toBe('coordinator');
+      expect(sug.display_name).toBe('Coordinator');
+      expect(sug.value).toBe('use JWT');
+      expect(sug.rationale).toBe('simple');
+      expect(events.find((e) => e.type === 'suggestion_added')).toBeTruthy();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('postCoordinatorSuggestion resubmit updates the single coordinator suggestion (dedup), never a second', () => {
+    const { mgr, events, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'a' });
+      mgr.askGroup({ question: 'q?' });
+      const q = mgr.currentQuestion()!;
+      mgr.postCoordinatorSuggestion({ question_id: q.id, value: 'first', rationale: 'r1' });
+      mgr.postCoordinatorSuggestion({ question_id: q.id, value: 'second' });
+      expect(q.suggestions).toHaveLength(1);
+      expect(q.suggestions[0]!.value).toBe('second');
+      // Rationale cleared on resubmit with no rationale.
+      expect(q.suggestions[0]!.rationale).toBeUndefined();
+      expect(events.find((e) => e.type === 'suggestion_added')).toBeTruthy();
+      expect(events.find((e) => e.type === 'suggestion_updated')).toBeTruthy();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('postCoordinatorSuggestion works with ZERO participants present (no participant guard)', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'a' });
+      mgr.askGroup({ question: 'q?' });
+      const q = mgr.currentQuestion()!;
+      // No participants added at all.
+      mgr.postCoordinatorSuggestion({ question_id: q.id, value: 'solo' });
+      expect(q.suggestions).toHaveLength(1);
+      expect(q.suggestions[0]!.value).toBe('solo');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('snapshot() exposes a coordinator suggestion attributed "Coordinator" (not "unknown")', async () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'a' });
+      const t = mgr.askGroup({ question: 'q?' });
+      const qid = mgr.currentQuestion()!.id;
+      mgr.postCoordinatorSuggestion({ question_id: qid, value: 'pick me', rationale: 'good' });
+      const snap = await mgr.awaitAnswer({ ticket_id: t.ticket_id, timeout_s: 1 });
+      expect(snap.suggestions).toEqual([
+        { participant_name: 'Coordinator', value: 'pick me', rationale: 'good', at: expect.any(String) },
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('postCoordinatorSuggestion returns silently (no throw, no emit) when question is missing or not broadcast', () => {
+    const { mgr, events, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'a' });
+      const t = mgr.askGroup({ question: 'q?' });
+      const qid = mgr.currentQuestion()!.id;
+      // Resolve the question so it is no longer 'broadcast'.
+      mgr.recordAnswer({ question_id: qid, value: 'done', source: 'override' });
+      const before = events.length;
+      // Missing question id — no-op, no throw.
+      expect(() =>
+        mgr.postCoordinatorSuggestion({ question_id: 'q_missing' as typeof qid, value: 'x' }),
+      ).not.toThrow();
+      // Resolved (terminal, removed from open_questions) — also a no-op.
+      expect(() =>
+        mgr.postCoordinatorSuggestion({ question_id: qid, value: 'late' }),
+      ).not.toThrow();
+      expect(t.ticket_id).toMatch(/^sb_t_/);
+      // No suggestion_added/updated emitted by either no-op call.
+      const after = events.slice(before);
+      expect(after.find((e) => e.type === 'suggestion_added')).toBeFalsy();
+      expect(after.find((e) => e.type === 'suggestion_updated')).toBeFalsy();
+    } finally {
+      cleanup();
+    }
+  });
+
   it('stop() returns transcript path with ended_reason=stop_session', () => {
     const { mgr, cleanup } = makeMgr();
     try {

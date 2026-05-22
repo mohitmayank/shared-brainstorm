@@ -562,6 +562,89 @@ describe('HTTP API', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Coordinator-as-planner: POST /api/coordinator/suggestion
+  // The route mounts requireCoordinator and reuses the ticket_id→question lookup
+  // and 404/409 handling of /api/coordinator/answer, but seeds the suggestion
+  // pool (postCoordinatorSuggestion) instead of resolving the question.
+  // ---------------------------------------------------------------------------
+  describe('http — POST /api/coordinator/suggestion', () => {
+    it('401 without sb_c cookie — not_coordinator; suggestion never lands', async () => {
+      const { app, mgr } = setup();
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/suggestion',
+        json({ ticket_id, value: 'use JWT' }),
+      );
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: 'not_coordinator' });
+      expect(mgr.currentQuestion()!.suggestions).toHaveLength(0);
+      // Question stays open (not finalized) — this is not an override path.
+      expect(mgr.currentQuestion()!.status).toBe('broadcast');
+    });
+
+    it('200 with valid cookie; coordinator-authored suggestion lands on the question', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/suggestion',
+        json({ ticket_id, value: 'use JWT', rationale: 'simple' }, cookie),
+      );
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ ok: true });
+      const q = mgr.currentQuestion()!;
+      expect(q.suggestions).toHaveLength(1);
+      expect(q.suggestions[0]!.author_kind).toBe('coordinator');
+      expect(q.suggestions[0]!.display_name).toBe('Coordinator');
+      expect(q.suggestions[0]!.value).toBe('use JWT');
+      // Question stays open — the coordinator picks the final answer later.
+      expect(q.status).toBe('broadcast');
+    });
+
+    it('404 ticket_not_found for an unknown ticket_id', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/suggestion',
+        json({ ticket_id: 'tk_nonexistent', value: 'x' }, cookie),
+      );
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: 'ticket_not_found' });
+    });
+
+    it('409 already_resolved for an already-resolved ticket', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      // Resolve the question via the answer route so its ticket becomes terminal.
+      const first = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
+      );
+      expect(first.status).toBe(200);
+      const res = await app.request(
+        '/api/coordinator/suggestion',
+        json({ ticket_id, value: 'too late' }, cookie),
+      );
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({ error: 'already_resolved' });
+    });
+
+    it('400 on missing value with a valid cookie', async () => {
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const res = await app.request(
+        '/api/coordinator/suggestion',
+        json({ ticket_id }, cookie),
+      );
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ error: 'invalid' });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Phase 4 / JOIN-02: POST /api/coordinator/approve
   // ---------------------------------------------------------------------------
   describe('POST /api/coordinator/approve', () => {

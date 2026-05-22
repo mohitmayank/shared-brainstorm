@@ -15,6 +15,7 @@ Your AI plans alone, but real product decisions need your team. Your agent asks 
 - **Talk-with-AI** — participants can ask the agent clarifying questions; the reply appears inline.
 - **Per-room chat** — teammates can discuss freely alongside the suggestion stream.
 - **Coordinator web UI** — drive the session from a browser tab alongside the CLI; approve, lock, and kick participants.
+- **Coordinator as planner** — you can add your own answer to the pool (shown to teammates as "Coordinator") and then pick the final answer from all candidates, yours included.
 - A transcript of every decision saved to `~/.shared-brainstorm/sessions/`.
 
 ## Install
@@ -55,7 +56,7 @@ Your agent will:
 1. Spin up a session and hand you a share link (auto-copied to your clipboard).
 2. Your teammates open the link — the host approves each one before they enter the session.
 3. Post questions to the live page (one at a time, or a batch). Teammates submit suggestions and comments in real time.
-4. Pick the final answer from the CLI or from the coordinator browser UI. Lock or kick participants as needed.
+4. Pick the final answer from the CLI or from the coordinator browser UI — or add your own answer as a planner first, then pick from the whole pool. Lock or kick participants as needed.
 
 You can drive the whole session from the terminal; the coordinator browser UI is available for a more visual experience.
 

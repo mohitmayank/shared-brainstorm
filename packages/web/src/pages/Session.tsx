@@ -27,6 +27,16 @@ export function Session({ session, me, sessionStatus, presence, myStatus, onTypi
       <div className="card">
         <h1>shared-brainstorm</h1>
         <SessionStatusPill status={sessionStatus} />
+        {sessionStatus === 'choosing' && (
+          <p
+            className="presence-coordinator-picking muted"
+            data-testid="presence-coordinator-picking"
+            role="status"
+            aria-live="polite"
+          >
+            Coordinator is picking the final answer
+          </p>
+        )}
         <p style={{ marginBottom: '.5rem' }}>{session.brief}</p>
         <div className="participants">
           {/* WR-03: show only approved participants. Kicked and pending participants
@@ -102,17 +112,6 @@ export function Session({ session, me, sessionStatus, presence, myStatus, onTypi
           />
         ))}
       </div>
-
-      {sessionStatus === 'choosing' && (
-        <p
-          className="presence-coordinator-picking muted"
-          data-testid="presence-coordinator-picking"
-          role="status"
-          aria-live="polite"
-        >
-          Coordinator is picking the final answer
-        </p>
-      )}
 
       {activeQuestions.length === 0 && sessionStatus !== 'done' && (
         <div className="join-empty-cta card" data-testid="join-empty-cta">

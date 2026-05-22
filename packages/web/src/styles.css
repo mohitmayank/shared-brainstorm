@@ -257,11 +257,16 @@ ul.suggestions li, ul.comments li {
   vertical-align: middle;
 }
 
+/* @keyframes must live at top level, not inside @media — keyframes defined
+   inside a media query are only available while that query matches, which is a
+   latent trap if a future `animation: pulse` is added outside a no-preference
+   block. The reduced-motion preference is enforced at each `animation:` usage. */
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: .45; }
-  }
   .join-connected-dot { animation: pulse 2s ease-in-out infinite; }
 }
 

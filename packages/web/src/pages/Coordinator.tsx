@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WireSession, WireParticipant, WireSuggestion } from '../state.js';
-import { postCoordinatorAnswer, postApprove, postKick, postLock } from '../lib/api.js';
+import {
+  postCoordinatorAnswer,
+  postCoordinatorSuggestion,
+  postApprove,
+  postKick,
+  postLock,
+} from '../lib/api.js';
 import { DecisionsPanel } from '../components/coordinator/DecisionsPanel.js';
 import { CoordinatorQuestionCard } from '../components/coordinator/CoordinatorQuestionCard.js';
 import { SessionStatusPill } from '../components/SessionStatusPill.js';
@@ -24,12 +30,16 @@ interface CardState {
   overrideText: string;
   recording: boolean;
   error: string | null;
+  // Coordinator-as-planner: in-progress free-text answer the coordinator is
+  // contributing to the suggestion pool (separate from the override text).
+  addAnswerText: string;
 }
 
 const EMPTY_CARD: CardState = {
   overrideText: '',
   recording: false,
   error: null,
+  addAnswerText: '',
 };
 
 /**
@@ -118,6 +128,36 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
       patchCard(ticketId, { overrideText: text });
     },
     [patchCard],
+  );
+
+  const onChangeAddAnswer = useCallback(
+    (ticketId: string, text: string) => {
+      patchCard(ticketId, { addAnswerText: text });
+    },
+    [patchCard],
+  );
+
+  // Coordinator-as-planner: contribute the coordinator's own answer to the pool.
+  // This is NOT a finalize — it does not set `recording` and does not resolve the
+  // question. The new suggestion arrives via the `suggestion_added` broadcast and
+  // can then be selected + recorded with source 'suggestion' via the pick path.
+  const onAddAnswer = useCallback(
+    async (ticketId: string): Promise<void> => {
+      const value = (cards[ticketId]?.addAnswerText ?? '').trim();
+      if (!value) return;
+      try {
+        await postCoordinatorSuggestion({ ticket_id: ticketId, value });
+        patchCard(ticketId, { addAnswerText: '', error: null });
+      } catch (e: unknown) {
+        const status = (e as { status?: number }).status;
+        const msg =
+          status === 409
+            ? 'That question was already resolved.'
+            : `Couldn't add that answer — try again. (${status ?? 'network'})`;
+        patchCard(ticketId, { error: msg });
+      }
+    },
+    [cards, patchCard],
   );
 
   const record = useCallback(
@@ -306,10 +346,13 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
                 overrideText={cardFor(q.ticket_id).overrideText}
                 recording={cardFor(q.ticket_id).recording}
                 error={cardFor(q.ticket_id).error}
+                addAnswerText={cardFor(q.ticket_id).addAnswerText}
                 onSelectSuggestion={(suggestionId) => onSelectSuggestion(q.ticket_id, suggestionId)}
                 onChangeOverride={(text) => onChangeOverride(q.ticket_id, text)}
                 onRecordSuggestion={() => onRecordSuggestion(q.ticket_id, q.suggestions)}
                 onRecordOverride={() => onRecordOverride(q.ticket_id)}
+                onChangeAddAnswer={(text) => onChangeAddAnswer(q.ticket_id, text)}
+                onAddAnswer={() => void onAddAnswer(q.ticket_id)}
               />
             ))}
           </div>

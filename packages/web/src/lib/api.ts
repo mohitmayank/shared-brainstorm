@@ -80,6 +80,31 @@ export function postCoordinatorAnswer(args: CoordinatorAnswerArgs): Promise<{ ok
   return post<{ ok: boolean }>('/api/coordinator/answer', args);
 }
 
+export interface CoordinatorSuggestionArgs {
+  ticket_id: string;
+  value: string;
+  rationale?: string;
+}
+
+/**
+ * Coordinator-as-planner: the coordinator seeds the suggestion pool with their
+ * own answer (not an immediate finalize). POSTs to `/api/coordinator/suggestion`,
+ * gated server-side by the `sb_c` cookie. The suggestion then appears in the
+ * normal list (via `suggestion_added` broadcast) where it can be picked + recorded
+ * with `source:'suggestion'` through the existing answer route. Rejects with an
+ * Error carrying `.status` on 4xx/409 (409 → already resolved).
+ */
+export function postCoordinatorSuggestion(
+  args: CoordinatorSuggestionArgs,
+): Promise<{ ok: boolean }> {
+  const body: { ticket_id: string; value: string; rationale?: string } = {
+    ticket_id: args.ticket_id,
+    value: args.value,
+  };
+  if (args.rationale !== undefined) body.rationale = args.rationale;
+  return post<{ ok: boolean }>('/api/coordinator/suggestion', body);
+}
+
 export function postApprove(args: { participant_id: string }): Promise<{ ok: boolean }> {
   return post<{ ok: boolean }>('/api/coordinator/approve', args);
 }

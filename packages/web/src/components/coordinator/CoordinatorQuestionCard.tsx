@@ -10,10 +10,14 @@ interface CoordinatorQuestionCardProps {
   overrideText: string;
   recording: boolean;
   error: string | null;
+  // Coordinator-as-planner: free-text answer the coordinator contributes to the pool.
+  addAnswerText: string;
   onSelectSuggestion: (suggestionId: string) => void;
   onChangeOverride: (text: string) => void;
   onRecordSuggestion: () => void;
   onRecordOverride: () => void;
+  onChangeAddAnswer: (text: string) => void;
+  onAddAnswer: () => void;
 }
 
 /**
@@ -36,13 +40,20 @@ export function CoordinatorQuestionCard({
   overrideText,
   recording,
   error,
+  addAnswerText,
   onSelectSuggestion,
   onChangeOverride,
   onRecordSuggestion,
   onRecordOverride,
+  onChangeAddAnswer,
+  onAddAnswer,
 }: CoordinatorQuestionCardProps) {
   const isResolved = question.status === 'resolved';
   const { suggestions, comments } = question;
+  // Coordinator-as-planner: resolve a suggestion's display name, preferring the
+  // embedded coordinator display_name (no roster entry) over the roster lookup.
+  const nameForSuggestion = (s: WireQuestion['suggestions'][number]): string =>
+    s.author_kind === 'coordinator' ? (s.display_name ?? 'Coordinator') : participantName(s.participant_id);
 
   return (
     <article
@@ -55,8 +66,15 @@ export function CoordinatorQuestionCard({
 
       {question.status === 'broadcast' &&
         (() => {
+          // Coordinator-as-planner: the coordinator's own suggestion is NOT a
+          // participant answer — exclude it from the "N/M answered" count so the
+          // coordinator's contribution never produces e.g. "3/2 answered".
           const answeredParticipants = [
-            ...new Map(question.suggestions.map((s) => [s.participant_id, s])).values(),
+            ...new Map(
+              question.suggestions
+                .filter((s) => s.author_kind !== 'coordinator')
+                .map((s) => [s.participant_id, s]),
+            ).values(),
           ];
           const approvedCount = participants.filter((p) => p.status === 'approved').length;
           const names = answeredParticipants
@@ -118,7 +136,7 @@ export function CoordinatorQuestionCard({
             <SuggestionRow
               key={s.id}
               suggestion={s}
-              participantName={participantName(s.participant_id)}
+              participantName={nameForSuggestion(s)}
               ticketId={question.ticket_id}
               isSelected={!isResolved && selectedSuggestionId === s.id}
               disabled={isResolved || recording}
@@ -206,6 +224,40 @@ export function CoordinatorQuestionCard({
           <p className="muted" style={{ marginTop: '.25rem' }}>
             Select a suggestion above to enable.
           </p>
+
+          {/* Coordinator-as-planner: contribute your own answer to the pool. This
+              is VISUALLY DISTINCT from the override/finalize block below — it does
+              NOT resolve the question; the answer joins the suggestion list and can
+              be picked later like any other candidate. */}
+          <div
+            className="coordinator-add-answer"
+            data-testid="coordinator-add-answer"
+            style={{ marginTop: '.75rem' }}
+          >
+            <h3>Add your answer (as a planner)</h3>
+            <p className="muted" style={{ marginBottom: '.35rem' }}>
+              Seed the pool with your own candidate — it joins the suggestions above.
+            </p>
+            <textarea
+              data-testid="coordinator-add-answer-textarea"
+              aria-label="Add your answer as a suggestion"
+              maxLength={2000}
+              value={addAnswerText}
+              onChange={(e) => onChangeAddAnswer(e.target.value)}
+              style={{ marginBottom: '.35rem' }}
+            />
+            <div>
+              <button
+                type="button"
+                data-testid="coordinator-add-answer-submit"
+                aria-label="Add your answer to the suggestions"
+                disabled={!addAnswerText.trim() || recording}
+                onClick={onAddAnswer}
+              >
+                Add to suggestions
+              </button>
+            </div>
+          </div>
 
           <h3 style={{ marginTop: '.75rem' }}>Or write your own answer</h3>
           <textarea

@@ -233,7 +233,14 @@ export function QuestionCard({ question, me, participants, onTyping, onAsk }: Pr
           <ul className="suggestions">
             {otherSuggestions.map((s) => (
               <li key={s.id}>
-                <strong>{nameFor(participants, s.participant_id)}</strong>: {s.value}
+                {/* Coordinator-as-planner: prefer the embedded coordinator
+                    display_name (no roster entry) over the roster lookup. */}
+                <strong>
+                  {s.author_kind === 'coordinator'
+                    ? (s.display_name ?? 'Coordinator')
+                    : nameFor(participants, s.participant_id)}
+                </strong>
+                : {s.value}
                 {s.rationale && <span className="muted"> ({s.rationale})</span>}
               </li>
             ))}

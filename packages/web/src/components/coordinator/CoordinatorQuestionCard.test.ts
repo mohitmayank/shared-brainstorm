@@ -282,4 +282,50 @@ describe('Coordinator-as-planner: CoordinatorQuestionCard', () => {
     (submit!.props as { onClick: () => void }).onClick();
     expect(added).toBe(true);
   });
+
+  it('when the question has options, the add-answer block is a radio group (no textarea) and selecting fires onChangeAddAnswer with the label', async () => {
+    let chosen: string | null = null;
+    const tree = await renderCard({
+      question: makeQuestion({
+        options: [
+          { label: 'Postgres', description: 'relational' },
+          { label: 'Mongo' },
+        ],
+      }),
+      onChangeAddAnswer: (text) => {
+        chosen = text;
+      },
+    });
+    // Options replace the free-text textarea entirely (mirrors the participant card).
+    expect(findByTestId(tree, 'coordinator-add-answer-textarea')).toBeNull();
+    const optA = findByTestId(tree, 'coordinator-add-answer-option-Postgres');
+    const optB = findByTestId(tree, 'coordinator-add-answer-option-Mongo');
+    expect(optA).not.toBeNull();
+    expect(optB).not.toBeNull();
+    // The radio input lives inside the label — selecting it reports the label.
+    const radio = childrenOf(optA).find(
+      (n) => typeof n === 'object' && n !== null && (n as { type?: unknown }).type === 'input',
+    ) as { props: { onChange: () => void; checked: boolean } } | undefined;
+    expect(radio).toBeDefined();
+    radio!.props.onChange();
+    expect(chosen).toBe('Postgres');
+  });
+
+  it('option radio reflects the current addAnswerText as checked', async () => {
+    const tree = await renderCard({
+      question: makeQuestion({
+        options: [{ label: 'Postgres' }, { label: 'Mongo' }],
+      }),
+      addAnswerText: 'Mongo',
+    });
+    const checkedOf = (testId: string): boolean => {
+      const label = findByTestId(tree, testId);
+      const radio = childrenOf(label).find(
+        (n) => typeof n === 'object' && n !== null && (n as { type?: unknown }).type === 'input',
+      ) as { props: { checked: boolean } } | undefined;
+      return radio?.props.checked ?? false;
+    };
+    expect(checkedOf('coordinator-add-answer-option-Mongo')).toBe(true);
+    expect(checkedOf('coordinator-add-answer-option-Postgres')).toBe(false);
+  });
 });

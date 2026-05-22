@@ -50,6 +50,10 @@ export function CoordinatorQuestionCard({
 }: CoordinatorQuestionCardProps) {
   const isResolved = question.status === 'resolved';
   const { suggestions, comments } = question;
+  // Coordinator-as-planner: when the question carries options, the coordinator
+  // picks from them like any participant (QuestionCard) instead of retyping a
+  // label into the free-text box.
+  const hasOptions = !!(question.options && question.options.length > 0);
   // Coordinator-as-planner: resolve a suggestion's display name, preferring the
   // embedded coordinator display_name (no roster entry) over the roster lookup.
   const nameForSuggestion = (s: WireQuestion['suggestions'][number]): string =>
@@ -238,14 +242,39 @@ export function CoordinatorQuestionCard({
             <p className="muted" style={{ marginBottom: '.35rem' }}>
               Seed the pool with your own candidate — it joins the suggestions above.
             </p>
-            <textarea
-              data-testid="coordinator-add-answer-textarea"
-              aria-label="Add your answer as a suggestion"
-              maxLength={2000}
-              value={addAnswerText}
-              onChange={(e) => onChangeAddAnswer(e.target.value)}
-              style={{ marginBottom: '.35rem' }}
-            />
+            {hasOptions ? (
+              // Mirror the participant radio group: select an option instead of
+              // retyping its label. The chosen label populates `addAnswerText`.
+              <div role="radiogroup" aria-label="Pick an option to add" style={{ marginBottom: '.35rem' }}>
+                {question.options!.map((o) => (
+                  <label
+                    key={o.label}
+                    data-testid={`coordinator-add-answer-option-${o.label}`}
+                    style={{ display: 'block', marginBottom: '.25rem', cursor: 'pointer' }}
+                  >
+                    <input
+                      type="radio"
+                      name={`coordinator-add-answer-${question.id}`}
+                      value={o.label}
+                      checked={addAnswerText === o.label}
+                      onChange={() => onChangeAddAnswer(o.label)}
+                      style={{ width: 'auto', marginRight: '.5rem' }}
+                    />
+                    <strong>{o.label}</strong>
+                    {o.description && <span className="muted"> – {o.description}</span>}
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <textarea
+                data-testid="coordinator-add-answer-textarea"
+                aria-label="Add your answer as a suggestion"
+                maxLength={2000}
+                value={addAnswerText}
+                onChange={(e) => onChangeAddAnswer(e.target.value)}
+                style={{ marginBottom: '.35rem' }}
+              />
+            )}
             <div>
               <button
                 type="button"

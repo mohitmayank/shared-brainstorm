@@ -302,6 +302,12 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
   if (type === 'clarification_added') {
     if (!state.session) return { ...state, lastSeq: seq };
     const p = payload<{ question_id: string; clarification: WireClarification }>(evt);
+    // WR-02: if question_id is not yet in session.questions[], withOpenQuestion
+    // returns the session unchanged while lastSeq still advances — the event is
+    // effectively dropped. On the normal path question_broadcast always precedes
+    // this, so the question exists. Eventual consistency is guaranteed because
+    // `welcome` re-seeds the full questions[] (incl. clarifications[]) from
+    // sessionView(); do NOT remove that re-seed without revisiting this path.
     return {
       ...state,
       lastSeq: seq,

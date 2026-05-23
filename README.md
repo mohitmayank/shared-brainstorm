@@ -70,9 +70,9 @@ You can drive the whole session from the terminal; the coordinator browser UI is
 
 ## Documentation
 
-- **[Configuration](CONFIGURATION.md)** — environment variables, rate limits, bind address, cloudflared version pin.
-- **[Development](DEVELOPMENT.md)** — monorepo layout, build, and test commands.
-- **[Releasing](RELEASING.md)** — how a new version gets published to npm.
+- **[Configuration](wiki/CONFIGURATION.md)** — environment variables, rate limits, bind address, cloudflared version pin.
+- **[Development](wiki/DEVELOPMENT.md)** — monorepo layout, build, and test commands.
+- **[Releasing](wiki/RELEASING.md)** — how a new version gets published to npm.
 
 ## Contributing
 

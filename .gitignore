@@ -32,3 +32,9 @@ test-results/
 e2e/test-results/
 e2e/playwright-report/
 e2e/.tmp/
+
+# Playwright MCP scratch output (console logs, page dumps)
+.playwright-mcp/
+
+# Stray scratch screenshots
+check-s2.png

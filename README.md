@@ -1,9 +1,7 @@
 # shared-brainstorm
 
 [![npm version](https://img.shields.io/npm/v/shared-brainstorm.svg)](https://www.npmjs.com/package/shared-brainstorm)
-[![npm downloads](https://img.shields.io/npm/dm/shared-brainstorm.svg)](https://www.npmjs.com/package/shared-brainstorm)
 [![total downloads](https://img.shields.io/npm/dt/shared-brainstorm.svg)](https://www.npmjs.com/package/shared-brainstorm)
-[![node](https://img.shields.io/node/v/shared-brainstorm.svg)](https://www.npmjs.com/package/shared-brainstorm)
 [![license](https://img.shields.io/npm/l/shared-brainstorm.svg)](LICENSE)
 
 Get your team's input on your AI agent's design decisions — live in their browser, in seconds, with nothing to install.

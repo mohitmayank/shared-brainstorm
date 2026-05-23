@@ -3,12 +3,15 @@ import { installClaudeCode } from './claude-code.js';
 import { installCodex } from './codex.js';
 import { installOpencode } from './opencode.js';
 import { installGeminiCli } from './gemini-cli.js';
+import { checkCloudflared, cloudflaredAdvice, type ProbeFn } from './cloudflared.js';
 
 type Host = 'claude-code' | 'codex' | 'opencode' | 'gemini-cli';
 
 export interface RunInstallOpts {
   /** Override home directory; used in tests to avoid writing to the real home. */
   home?: string;
+  /** Injectable PATH probe for the cloudflared advisory; defaults to a real probe. */
+  probe?: ProbeFn;
 }
 
 export async function runInstall(host: Host, opts: RunInstallOpts = {}): Promise<void> {
@@ -38,6 +41,11 @@ export async function runInstall(host: Host, opts: RunInstallOpts = {}): Promise
       throw new Error(`runInstall: unknown host: ${String(_exhaustive)}`);
     }
   }
+  // Public-link readiness: tell the user whether cloudflared is available and,
+  // if not, how to install it (mirrors transport/selectTransport.ts detection).
+  const status = await checkCloudflared(opts.probe);
+  process.stdout.write(`\n${cloudflaredAdvice(status)}\n`);
+
   process.stdout.write(
     `\nNow ask your agent to brainstorm a decision with your team — e.g. "Postgres or DynamoDB?"\n`,
   );

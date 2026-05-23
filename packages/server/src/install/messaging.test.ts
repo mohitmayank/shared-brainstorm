@@ -35,12 +35,12 @@ describe('DISC-01: README messaging', () => {
     expect(readme.includes('team collaboration')).toBe(false);
   });
 
-  it('contains absolute GitHub demo link', () => {
-    expect(readme.includes('github.com/mohitmayank/shared-brainstorm')).toBe(true);
+  it('links the demo video', () => {
+    expect(readme.includes('shared-brainstorm-promo.mp4')).toBe(true);
   });
 
-  it('demo link uses htmlpreview renderer, not raw blob view', () => {
-    expect(readme.includes('htmlpreview.github.io')).toBe(true);
+  it('no longer references the removed interactive walkthrough', () => {
+    expect(readme.includes('htmlpreview.github.io')).toBe(false);
   });
 });
 
@@ -51,6 +51,9 @@ describe('DISC-01: README messaging', () => {
 describe('DISC-01: install success message', () => {
   let stdoutCalls: string[];
   let tmpHome: string;
+  // Deterministic probe so the cloudflared advisory doesn't shell out to
+  // which/where on the test machine. Pretend cloudflared is installed.
+  const probe = async (cmd: string): Promise<boolean> => cmd === 'cloudflared';
 
   beforeEach(() => {
     // Isolate filesystem writes to a temp dir — prevents runInstall from
@@ -69,26 +72,39 @@ describe('DISC-01: install success message', () => {
   });
 
   it('runInstall claude-code emits what-to-do-next line', async () => {
-    await runInstall('claude-code', { home: tmpHome });
+    await runInstall('claude-code', { home: tmpHome, probe });
     const combined = stdoutCalls.join('');
     expect(combined.includes('ask your agent to brainstorm')).toBe(true);
   });
 
   it('runInstall codex emits what-to-do-next line', async () => {
-    await runInstall('codex', { home: tmpHome });
+    await runInstall('codex', { home: tmpHome, probe });
     const combined = stdoutCalls.join('');
     expect(combined.includes('ask your agent to brainstorm')).toBe(true);
   });
 
   it('runInstall opencode emits what-to-do-next line', async () => {
-    await runInstall('opencode', { home: tmpHome });
+    await runInstall('opencode', { home: tmpHome, probe });
     const combined = stdoutCalls.join('');
     expect(combined.includes('ask your agent to brainstorm')).toBe(true);
   });
 
   it('runInstall gemini-cli emits what-to-do-next line', async () => {
-    await runInstall('gemini-cli', { home: tmpHome });
+    await runInstall('gemini-cli', { home: tmpHome, probe });
     const combined = stdoutCalls.join('');
     expect(combined.includes('ask your agent to brainstorm')).toBe(true);
+  });
+
+  it('emits the cloudflared advisory (found, since the probe reports it)', async () => {
+    await runInstall('claude-code', { home: tmpHome, probe });
+    const combined = stdoutCalls.join('');
+    expect(combined.includes('cloudflared found')).toBe(true);
+  });
+
+  it('suggests installing cloudflared when it is absent', async () => {
+    const absent = async (): Promise<boolean> => false;
+    await runInstall('claude-code', { home: tmpHome, probe: absent });
+    const combined = stdoutCalls.join('');
+    expect(combined.toLowerCase().includes('install cloudflared')).toBe(true);
   });
 });

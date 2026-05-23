@@ -1,0 +1,11 @@
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/frames/live5-01.png'
+duration 1.6
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/frames/live5-02.png'
+duration 1.6
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/frames/live5-03.png'
+duration 1.6
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/frames/live5-04.png'
+duration 1.6
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/frames/live5-05.png'
+duration 4.54
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/frames/live5-05.png'

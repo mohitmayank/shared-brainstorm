@@ -1,0 +1,2 @@
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene4a.mp4'
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene4b.mp4'

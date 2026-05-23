@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>shared-brainstorm — terminal</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d1117;
+    --term: #0d1117;
+    --fg: #c9d1d9;
+    --dim: #8b949e;
+    --user: #e6edf3;
+    --accent: #58a6ff;   /* prompt / agent dot */
+    --green: #3fb950;
+    --yellow: #d29922;
+    --pink: #ff7b72;
+    --mono: 'SF Mono','JetBrains Mono','Cascadia Code','Fira Code',ui-monospace,monospace;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    overflow: hidden;
+    cursor: none;   /* clean promo — no pointer in frame */
+  }
+  * { cursor: none !important; }
+
+  /* 1920x1080 capture frame */
+  .stage {
+    width: 100vw; height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    background:
+      radial-gradient(1200px 700px at 50% 20%, #161b22 0%, #0d1117 70%);
+  }
+
+  .window {
+    width: min(1500px, 90vw);
+    height: min(820px, 84vh);
+    background: var(--term);
+    border: 1px solid #30363d;
+    border-radius: 14px;
+    box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.02) inset;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  .titlebar {
+    height: 44px; flex: 0 0 44px;
+    display: flex; align-items: center;
+    padding: 0 18px; gap: 9px;
+    background: #161b22;
+    border-bottom: 1px solid #21262d;
+  }
+  .dot { width: 13px; height: 13px; border-radius: 50%; }
+  .dot.r { background: #ff5f57; }
+  .dot.y { background: #febc2e; }
+  .dot.g { background: #28c840; }
+  .titlebar .label {
+    margin-left: 12px; color: var(--dim);
+    font-family: var(--mono); font-size: 14px;
+  }
+
+  .screen {
+    flex: 1; min-height: 0;
+    padding: 30px 40px;
+    font-family: var(--mono);
+    font-size: 21px;
+    line-height: 1.62;
+    color: var(--fg);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: hidden;
+  }
+
+  /* token colors */
+  .prompt   { color: var(--accent); font-weight: 600; }
+  .user     { color: var(--user); font-weight: 600; }
+  .agent    { color: var(--accent); }
+  .dim      { color: var(--dim); }
+  .green    { color: var(--green); }
+  .yellow   { color: var(--yellow); }
+  .pink     { color: var(--pink); }
+  .bold     { font-weight: 700; color: #fff; }
+  .answer   { color: var(--green); font-weight: 700; }
+  .link     { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+
+  .cursor {
+    display: inline-block;
+    width: 11px; height: 1.05em;
+    background: var(--accent);
+    transform: translateY(3px);
+    animation: blink 1.05s step-end infinite;
+  }
+  @keyframes blink { 0%,49%{opacity:1} 50%,100%{opacity:0} }
+
+  /* Outro card (scene 7) */
+  .outro {
+    width: min(1500px, 90vw);
+    height: min(820px, 84vh);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 30px; text-align: center;
+    font-family: var(--mono);
+  }
+  .outro .brand {
+    font-size: 64px; font-weight: 800; letter-spacing: -1.5px;
+    color: #fff;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .outro .tag {
+    font-size: 26px; color: var(--dim);
+    font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .outro .cmd {
+    margin-top: 14px;
+    font-size: 26px; color: var(--green);
+    background: #161b22; border: 1px solid #30363d;
+    padding: 16px 28px; border-radius: 10px;
+  }
+  .outro .cmd .dollar { color: var(--dim); }
+  .outro .repo { font-size: 20px; color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="window" id="win">
+    <div class="titlebar">
+      <span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+      <span class="label">claude — planning</span>
+    </div>
+    <div class="screen" id="screen"></div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Scene scripts — each is a list of "ops": {t:'static'|'type', cls, text, speed}
+// 'static' renders instantly; 'type' typewrites. A trailing cursor blinks.
+// Drives the agent-side beats that the live UI can't show.
+// ---------------------------------------------------------------------------
+const SP = { fast: 14, normal: 24, slow: 42 };
+
+const SCENES = {
+  // Scene 1 — the problem: agent mid-plan hits a team decision
+  1: [
+    { type: 'static', html: '<span class="dim">› Plan the auth flow for the new API.</span>\n\n' },
+    { type: 'type', cls: 'agent', text: '⏺ Mapping the auth flow. One decision needs the team before I commit:\n\n', speed: SP.fast },
+    { type: 'type', cls: 'bold', text: '   Where do sessions live — Postgres or Redis?\n', speed: SP.normal },
+    { type: 'type', cls: 'dim', text: '   Affects latency, ops surface, and the migration path.\n', speed: SP.fast },
+    { type: 'cursor' },
+  ],
+
+  // Scene 2 — kick it off from the terminal
+  2: [
+    { type: 'static', html: '<span class="prompt">› </span>' },
+    { type: 'type', cls: 'user', text: 'Brainstorm the auth flow with my team.', speed: SP.slow },
+    { type: 'static', html: '\n\n' },
+    { type: 'type', cls: 'agent', text: '⏺ shared-brainstorm · spinning up a session…\n\n', speed: SP.fast },
+    { type: 'type', cls: 'green', text: '   ✓ Session live\n', speed: SP.normal, delay: 250 },
+    { type: 'type', cls: 'green', text: '   ✓ Team invite copied to your clipboard\n\n', speed: SP.normal, delay: 150 },
+    { type: 'type', cls: 'dim', text: '   Team join:    ', speed: SP.fast, delay: 150 },
+    { type: 'type', cls: 'link', text: 'http://team.local/s/xK9mP2\n', speed: SP.fast },
+    { type: 'type', cls: 'dim', text: '   Coordinator:  ', speed: SP.fast, delay: 150 },
+    { type: 'type', cls: 'link', text: 'http://team.local/s/xK9mP2?role=coordinator\n\n', speed: SP.fast },
+    { type: 'type', cls: 'dim', text: '   Share the first · open the second to drive.\n', speed: SP.fast },
+    { type: 'cursor' },
+  ],
+
+  // Scene 4 (terminal beat) — agent posts the question, then waits
+  4: [
+    { type: 'static', html: '<span class="prompt">› </span><span class="user">post the question to the team</span>\n\n' },
+    { type: 'type', cls: 'agent', text: '⏺ askGroup → ', speed: SP.fast },
+    { type: 'type', cls: 'bold', text: '"Sessions in Postgres or Redis?"\n', speed: SP.normal },
+    { type: 'type', cls: 'dim', text: '     · Postgres     · Redis\n', speed: SP.fast },
+    { type: 'type', cls: 'dim', text: '     recommendation: Redis — built-in TTL, fast reads\n\n', speed: SP.fast },
+    { type: 'type', cls: 'yellow', text: '   ⧖ Waiting for the team…', speed: SP.normal, delay: 200 },
+    { type: 'cursor' },
+  ],
+
+  // Scene 6 — answer flows back to the agent
+  6: [
+    { type: 'static', html: '<span class="yellow">   ⧖ Waiting for the team…</span>\n\n' },
+    { type: 'type', cls: 'agent', text: '⏺ Team decided: ', speed: SP.fast },
+    { type: 'type', cls: 'answer', text: 'Redis\n', speed: SP.slow },
+    { type: 'type', cls: 'dim', text: '   3 teammates weighed in · decision recorded\n\n', speed: SP.fast, delay: 150 },
+    { type: 'type', cls: 'green', text: '   ✓ Continuing the plan with Redis-backed sessions.\n', speed: SP.normal, delay: 200 },
+    { type: 'type', cls: 'dim', text: '   transcript → ~/.shared-brainstorm/sessions/2026-05-23-auth-flow.json\n', speed: SP.fast },
+    { type: 'cursor' },
+  ],
+};
+
+// ---------------------------------------------------------------------------
+const screen = document.getElementById('screen');
+
+function appendCursor() {
+  const c = document.createElement('span');
+  c.className = 'cursor';
+  screen.appendChild(c);
+}
+
+function typeOp(op) {
+  return new Promise((res) => {
+    const span = document.createElement('span');
+    if (op.cls) span.className = op.cls;
+    screen.appendChild(span);
+    const text = op.text;
+    let i = 0;
+    const speed = op.speed || SP.normal;
+    const iv = setInterval(() => {
+      span.textContent += text[i++];
+      if (i >= text.length) { clearInterval(iv); res(); }
+    }, speed);
+  });
+}
+
+function staticOp(op) {
+  const span = document.createElement('span');
+  if (op.html !== undefined) span.innerHTML = op.html;
+  else { if (op.cls) span.className = op.cls; span.textContent = op.text || ''; }
+  screen.appendChild(span);
+}
+
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function play(ops) {
+  for (const op of ops) {
+    if (op.delay) await wait(op.delay);
+    if (op.type === 'static') staticOp(op);
+    else if (op.type === 'type') await typeOp(op);
+    else if (op.type === 'cursor') appendCursor();
+  }
+  document.body.setAttribute('data-scene-complete', '1');
+}
+
+// Deterministic still-frame render: instantly render the first `upto` ops
+// (no typewriter), for crisp high-res frame-by-frame capture.
+function still(ops, upto) {
+  const n = Math.min(upto, ops.length);
+  for (let i = 0; i < n; i++) {
+    const op = ops[i];
+    if (op.type === 'static') staticOp(op);
+    else if (op.type === 'type') {
+      const s = document.createElement('span');
+      if (op.cls) s.className = op.cls;
+      s.textContent = op.text;
+      screen.appendChild(s);
+    } else if (op.type === 'cursor') appendCursor();
+  }
+  if (!screen.querySelector('.cursor')) appendCursor();
+  document.body.setAttribute('data-scene-complete', '1');
+}
+// Total op count per scene — exposed so the capture driver knows the frame count.
+window.__opCount = (s) => (SCENES[s] ? SCENES[s].length : 0);
+// Re-render a scene up to `k` ops instantly (clears first) — for stepped capture.
+window.__render = (s, k) => { screen.innerHTML = ''; still(SCENES[s], k); };
+
+// ---------------------------------------------------------------------------
+const params = new URLSearchParams(location.search);
+const scene = params.get('scene');
+const upto = params.get('upto');
+
+if (scene === '7') {
+  // Outro card replaces the window entirely
+  document.getElementById('win').outerHTML = `
+    <div class="outro">
+      <div class="brand">shared-brainstorm</div>
+      <div class="tag">Your team, in your agent's planning loop.</div>
+      <div class="cmd"><span class="dollar">$ </span>npx shared-brainstorm --install claude-code</div>
+      <div class="repo">github.com/mohitmayank/shared-brainstorm</div>
+    </div>`;
+  document.body.setAttribute('data-scene-complete', '1');
+} else if (SCENES[scene]) {
+  if (upto !== null) {
+    still(SCENES[scene], parseInt(upto, 10));
+  } else {
+    // small lead-in so recordings have a clean head frame
+    setTimeout(() => play(SCENES[scene]), 400);
+  }
+} else {
+  screen.innerHTML = '<span class="dim">add ?scene=1|2|4|6|7</span>';
+}
+</script>
+</body>
+</html>

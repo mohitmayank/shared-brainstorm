@@ -1,0 +1,7 @@
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene1.mp4'
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene2.mp4'
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene3.mp4'
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene4.mp4'
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene5.mp4'
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene6.mp4'
+file '/home/files/git/mohit/shared-brainstorm/demo/video-build/clips/scene7.mp4'

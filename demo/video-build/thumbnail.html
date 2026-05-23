@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>shared-brainstorm — thumbnail</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117;
+    --fg: #c9d1d9;
+    --dim: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --mono: 'JetBrains Mono','Cascadia Code','Fira Code',ui-monospace,monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  }
+  html, body { width: 1280px; height: 720px; overflow: hidden; }
+  .stage {
+    width: 1280px; height: 720px; position: relative;
+    background:
+      radial-gradient(1100px 640px at 26% 36%, #1b2330 0%, #0d1117 62%);
+    display: flex; align-items: center;
+    padding: 0 70px;
+    font-family: var(--sans);
+  }
+  /* faint grid for texture */
+  .stage::before {
+    content: ''; position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(88,166,255,.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(88,166,255,.05) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(900px 520px at 30% 40%, #000 0%, transparent 75%);
+  }
+
+  /* ---- left: text block ---- */
+  .left { width: 690px; position: relative; z-index: 2; }
+  .brand {
+    display: inline-flex; align-items: center; gap: 12px;
+    font-family: var(--mono); font-size: 24px; color: var(--dim);
+    letter-spacing: .2px; margin-bottom: 26px;
+  }
+  .brand .dot {
+    width: 15px; height: 15px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 14px 2px rgba(63,185,80,.55);
+  }
+  h1 {
+    font-size: 82px; line-height: 1.02; font-weight: 800;
+    letter-spacing: -2.5px; color: #fff;
+  }
+  h1 .hl { color: var(--green); }
+  .sub {
+    margin-top: 28px; font-size: 27px; line-height: 1.4;
+    color: var(--dim); max-width: 600px; font-weight: 500;
+  }
+  .sub b { color: var(--fg); font-weight: 700; }
+  .pills { margin-top: 34px; display: flex; gap: 14px; }
+  .pill {
+    font-family: var(--mono); font-size: 19px; color: var(--fg);
+    background: #161b22; border: 1px solid #30363d;
+    padding: 11px 18px; border-radius: 999px;
+  }
+  .pill .k { color: var(--green); }
+
+  /* ---- right: live question card ---- */
+  .card {
+    position: absolute; right: 64px; top: 50%;
+    width: 392px; transform: translateY(-50%) rotate(2.2deg);
+    background: #161b22; border: 1px solid #30363d; border-radius: 18px;
+    box-shadow: 0 40px 90px rgba(0,0,0,.6);
+    padding: 26px 26px 22px; z-index: 2;
+  }
+  .card .row { display: flex; align-items: center; justify-content: space-between; }
+  .live {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 15px; color: #ff7b72; font-weight: 600;
+    letter-spacing: .5px;
+  }
+  .live .b { width: 9px; height: 9px; border-radius: 50%; background: #ff7b72;
+             box-shadow: 0 0 10px 1px rgba(255,123,114,.6); }
+  .card .ask { font-family: var(--mono); font-size: 15px; color: var(--dim); }
+  .card h2 {
+    margin-top: 14px; font-size: 27px; color: #fff; font-weight: 700;
+    letter-spacing: -.4px; font-family: var(--sans);
+  }
+  .opts { margin-top: 18px; display: flex; flex-direction: column; gap: 11px; }
+  .opt {
+    display: flex; align-items: center; gap: 12px;
+    border: 1px solid #30363d; border-radius: 11px;
+    padding: 13px 15px; font-size: 20px; color: var(--fg);
+    font-family: var(--sans); font-weight: 600;
+  }
+  .opt .tick { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #444c56; flex: 0 0 22px; }
+  .opt.sel { border-color: var(--green); background: rgba(63,185,80,.10); color: #fff; }
+  .opt.sel .tick {
+    border-color: var(--green); background: var(--green);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .opt.sel .tick::after { content: '✓'; color: #0d1117; font-size: 14px; font-weight: 900; }
+  .opt .bar { margin-left: auto; font-family: var(--mono); font-size: 15px; color: var(--dim); }
+  .opt.sel .bar { color: var(--green); }
+  .voters { margin-top: 20px; display: flex; align-items: center; gap: 10px; }
+  .av { width: 34px; height: 34px; border-radius: 50%; margin-left: -10px;
+        border: 2px solid #161b22; display: flex; align-items: center; justify-content: center;
+        font-family: var(--sans); font-weight: 700; font-size: 14px; color: #0d1117; }
+  .av:first-child { margin-left: 0; }
+  .a1 { background: #58a6ff; } .a2 { background: #3fb950; } .a3 { background: #d29922; }
+  .voters .who { font-family: var(--mono); font-size: 15px; color: var(--dim); margin-left: 6px; }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="left">
+      <span class="brand"><span class="dot"></span>shared-brainstorm</span>
+      <h1>Your AI plans.<br /><span class="hl">Your team decides.</span></h1>
+      <div class="sub">Pull your teammates into your coding agent's planning loop — <b>live in their browser, in seconds.</b></div>
+      <div class="pills">
+        <span class="pill"><span class="k">$</span> npx shared-brainstorm</span>
+        <span class="pill">no install · no sign-up</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row">
+        <span class="ask">⏺ askGroup</span>
+        <span class="live"><span class="b"></span>LIVE</span>
+      </div>
+      <h2>Sessions — Postgres or Redis?</h2>
+      <div class="opts">
+        <div class="opt"><span class="tick"></span>Postgres<span class="bar">1</span></div>
+        <div class="opt sel"><span class="tick"></span>Redis<span class="bar">▌▌ 2</span></div>
+      </div>
+      <div class="voters">
+        <span class="av a1">S</span><span class="av a2">J</span><span class="av a3">A</span>
+        <span class="who">3 teammates weighed in</span>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

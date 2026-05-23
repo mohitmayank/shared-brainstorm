@@ -35,8 +35,8 @@ describe('DISC-01: README messaging', () => {
     expect(readme.includes('team collaboration')).toBe(false);
   });
 
-  it('links the demo video', () => {
-    expect(readme.includes('shared-brainstorm-promo.mp4')).toBe(true);
+  it('embeds the YouTube demo video', () => {
+    expect(readme.includes('youtu.be/cP9V4pDTtVQ')).toBe(true);
   });
 
   it('no longer references the removed interactive walkthrough', () => {

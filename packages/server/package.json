@@ -29,13 +29,13 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "@shared-brainstorm/shared": "*",
     "hono": "^4.6.0",
     "@hono/node-server": "^1.13.0",
     "@hono/node-ws": "^1.0.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@shared-brainstorm/shared": "*",
     "@types/ws": "^8.5.0",
     "supertest": "^7.0.0",
     "tsup": "^8.3.0",

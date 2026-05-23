@@ -38,3 +38,6 @@ e2e/.tmp/
 
 # Stray scratch screenshots
 check-s2.png
+
+# Marketing drafts (local only, not part of the shipped project)
+marketing/

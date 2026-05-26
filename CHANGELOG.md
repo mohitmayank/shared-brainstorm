@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.2.0](https://github.com/mohitmayank/shared-brainstorm/compare/v3.1.1...v3.2.0) (2026-05-26)
+
+### Features
+
+* **launch:** auto-open coordinator URL + planner-link dialog, drop clipboard ([075bab9](https://github.com/mohitmayank/shared-brainstorm/commit/075bab9ee0b1bf09a2544928bb992eca725cba57))
+* **welcome:** seed active advisories for cold-open coordinators ([80f2efc](https://github.com/mohitmayank/shared-brainstorm/commit/80f2efcf45deda289e2e3cb7da06344f510fe635))
+
 ## [3.1.1](https://github.com/mohitmayank/shared-brainstorm/compare/v3.1.0...v3.1.1) (2026-05-26)
 
 All notable changes to this project are documented here. This file is generated

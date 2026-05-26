@@ -11,7 +11,7 @@
   },
   "type": "module",
   "bin": {
-    "shared-brainstorm": "./bin/shared-brainstorm.js"
+    "shared-brainstorm": "bin/shared-brainstorm.js"
   },
   "main": "./dist/cli.js",
   "files": [

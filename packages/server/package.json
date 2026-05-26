@@ -35,20 +35,6 @@
     "@hono/node-ws": "^1.0.0",
     "zod": "^3.23.0"
   },
-  "release-it": {
-    "git": {
-      "commitMessage": "chore(release): v${version}",
-      "requireBranch": false,
-      "requireUpstream": false
-    },
-    "github": {
-      "release": true
-    },
-    "npm": {
-      "timeout": 1000,
-      "skipChecks": true
-    }
-  },
   "devDependencies": {
     "@shared-brainstorm/shared": "*",
     "@types/ws": "^8.5.0",

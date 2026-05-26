@@ -23,6 +23,12 @@ export interface RunningServer {
    * `transport.start()` can run because the transport needs the local port).
    */
   setSecureCookie(secure: boolean): void;
+  /**
+   * Phase 14 (SHARE-01): Set the participant join URL after transport resolves.
+   * Mirrors setSecureCookie boot-order pattern — HTTP boots before transport
+   * resolves publicUrl, so this must be called post-transport.start().
+   */
+  setPublicUrl(url: string): void;
 }
 
 export async function startHttpServer(args: {
@@ -136,6 +142,10 @@ export async function startHttpServer(args: {
   injectWebSocket(server);
 
   args.manager.setBroadcaster((evt) => wsRouter.broadcast(evt));
+  // Phase 11 (ROOM-03): presence is reported by ws.ts calling
+  // manager.notifyParticipant{Connected,Disconnected} directly on every
+  // non-coordinator connect/close/eviction — no callback indirection needed
+  // (WR-03 removed the dead setPresenceCallbacks seam).
 
   const actualPort = addr.port;
 
@@ -158,6 +168,9 @@ export async function startHttpServer(args: {
     },
     setSecureCookie: (secure: boolean) => {
       secureCookieFlag = secure;
+    },
+    setPublicUrl: (url: string) => {
+      wsRouter.setPublicUrl(url);
     },
   };
 }

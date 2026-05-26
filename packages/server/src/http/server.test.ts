@@ -512,16 +512,94 @@ describe('HTTP API', () => {
         json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
       );
       expect(second.status).toBe(409);
-      expect(await second.json()).toEqual({ error: 'already_resolved' });
+      // D-08: body now carries resolution (enriched 409); check error field only for this WR-02 regression test
+      expect(await second.json()).toEqual(expect.objectContaining({ error: 'already_resolved' }));
     });
 
-    it('409 already_resolved when recordAnswer throws not-broadcast (current question, status mutated)', async () => {
-      // Genuine 409 branch: the question is still the current_question (ticket
-      // guard passes) but its status is no longer `broadcast`, so recordAnswer
-      // throws `not broadcast`. This is the same-tick double-resolve window
-      // (Pitfall 4) the route maps to 409 instead of a 500. We reproduce it by
-      // wrapping the manager so sessionView still reports the question as current
-      // while recordAnswer surfaces the real not-broadcast throw.
+    // -------------------------------------------------------------------------
+    // Phase 9 (SYNC-02 D-08): Wave 0 stubs — 409 body carries resolution
+    // These tests document the expected 409 body shape once Wave 2 implements
+    // getTerminalResolution() in SessionManager and the server.ts 409 branch
+    // enriches the response body with resolution data.
+    // -------------------------------------------------------------------------
+
+    it('D-08 (a): 409 body carries resolution when question already resolved', async () => {
+      // Wave 0 stub — Wave 2 enriches the 409 body with resolution.
+      // Once Wave 2 lands, the second pick returns:
+      //   { error: 'already_resolved', resolution: { value, source, picked_by } }
+      // Until then this test will fail (or the assertion is deliberately loose).
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      // First pick — succeeds
+      const first = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
+      );
+      expect(first.status).toBe(200);
+      // Second pick — 409 with resolution body (Wave 2 behavior)
+      const second = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'use JWT', source: 'override' }, cookie),
+      );
+      expect(second.status).toBe(409);
+      expect(await second.json()).toEqual(
+        expect.objectContaining({
+          error: 'already_resolved',
+          resolution: expect.objectContaining({
+            value: expect.any(String),
+            source: expect.any(String),
+            picked_by: expect.any(String),
+          }),
+        }),
+      );
+    });
+
+    it('D-08 (b): concurrent coordinator picks — exactly one 200 and one 409 with resolution', async () => {
+      // Wave 0 stub — Node.js single-threaded event loop serialises the two
+      // requests; one wins with 200, the other loses with 409+resolution body.
+      // Wave 2 enriches the 409 body with resolution data.
+      const { app, mgr } = setup();
+      const cookie = await coordinatorCookie(app, mgr);
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      // Fire two concurrent requests (no await on the first before starting second)
+      const [r1, r2] = await Promise.all([
+        app.request(
+          '/api/coordinator/answer',
+          json({ ticket_id, value: 'concurrent A', source: 'override' }, cookie),
+        ),
+        app.request(
+          '/api/coordinator/answer',
+          json({ ticket_id, value: 'concurrent B', source: 'override' }, cookie),
+        ),
+      ]);
+      const statuses = [r1.status, r2.status].sort();
+      // Exactly one 200 and one 409
+      expect(statuses).toEqual([200, 409]);
+      // The 409 must carry resolution (Wave 2 behavior)
+      const loser = r1.status === 409 ? r1 : r2;
+      expect(await loser.json()).toEqual(
+        expect.objectContaining({
+          error: 'already_resolved',
+          resolution: expect.objectContaining({
+            value: expect.any(String),
+            source: expect.any(String),
+            picked_by: expect.any(String),
+          }),
+        }),
+      );
+    });
+
+    it('409 already_resolved when recordAnswer throws but the ticket is already terminal (same-tick race)', async () => {
+      // WR-03: the catch-block 409 branch now classifies via the structured
+      // isTerminalTicket() accessor instead of brittle Error.message substring
+      // matching. Genuine same-tick double-resolve window (Pitfall 4): the
+      // sessionView lookup still reports the question as open (ticket guard
+      // passes), but by the time recordAnswer runs the question was concurrently
+      // resolved — so it throws AND the ticket is now terminal. We reproduce it
+      // by wrapping the manager so sessionView reports the question while
+      // recordAnswer throws and isTerminalTicket()/getTerminalResolution()
+      // report the winning resolution.
       const { mgr } = setup();
       const cookie = await (async () => {
         const probe = buildApp({ manager: mgr });
@@ -533,15 +611,64 @@ describe('HTTP API', () => {
       })();
       const { ticket_id } = mgr.askGroup({ question: 'q?' });
       const cq = mgr.currentQuestion()!;
-      // Force the not-broadcast condition while keeping current_question set.
+      const wrapped = new Proxy(mgr, {
+        get(target, prop, receiver) {
+          if (prop === 'recordAnswer') {
+            return () => {
+              throw new Error('record_answer: question is not broadcast (status=resolved)');
+            };
+          }
+          if (prop === 'isTerminalTicket') {
+            return (tid: string) => tid === ticket_id;
+          }
+          if (prop === 'getTerminalResolution') {
+            return (tid: string) =>
+              tid === ticket_id
+                ? { value: 'winner', source: 'override', picked_by: 'Coordinator' }
+                : null;
+          }
+          const v = Reflect.get(target, prop, receiver);
+          return typeof v === 'function' ? v.bind(target) : v;
+        },
+      });
+      void cq;
+      const app = buildApp({ manager: wrapped });
+      const res = await app.request(
+        '/api/coordinator/answer',
+        json({ ticket_id, value: 'late', source: 'override' }, cookie),
+      );
+      expect(res.status).toBe(409);
+      expect(await res.json()).toEqual({
+        error: 'already_resolved',
+        resolution: { value: 'winner', source: 'override', picked_by: 'Coordinator' },
+      });
+    });
+
+    it('500 when recordAnswer throws for a NON-terminal ticket (WR-03: unexpected error is not masked as 409)', async () => {
+      // WR-03: an internal throw for a ticket that is NOT terminal is a genuinely
+      // unexpected error and must surface as 500 — the old brittle string match
+      // could mask such corruption as a 409. Here the question status is mutated
+      // out from under recordAnswer but the ticket never terminalises, so
+      // isTerminalTicket() is false and the route re-throws → 500.
+      const { mgr } = setup();
+      const cookie = await (async () => {
+        const probe = buildApp({ manager: mgr });
+        const res = await probe.request(
+          '/api/coordinator/join',
+          json({ token: mgr.coordinatorToken() }),
+        );
+        return res.headers.get('set-cookie')!.split(';')[0]!;
+      })();
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const cq = mgr.currentQuestion()!;
+      // Force not-broadcast while keeping the question open (never terminalised).
       cq.status = 'resolved';
       const app = buildApp({ manager: mgr });
       const res = await app.request(
         '/api/coordinator/answer',
         json({ ticket_id, value: 'late', source: 'override' }, cookie),
       );
-      expect(res.status).toBe(409);
-      expect(await res.json()).toEqual({ error: 'already_resolved' });
+      expect(res.status).toBe(500);
     });
 
     it('awaitAnswer wakeup: a pending poll resolves after a 200 POST (COORD-04 same TicketStore path)', async () => {

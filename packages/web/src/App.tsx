@@ -20,6 +20,7 @@ import { Join } from './pages/Join.js';
 import { Session } from './pages/Session.js';
 import { Coordinator } from './pages/Coordinator.js';
 import { TunnelBanner } from './components/TunnelBanner.js';
+import { TransportFailedBanner } from './components/TransportFailedBanner.js';
 
 /**
  * COORD-01: parse `?role=coordinator&token=X` once at module evaluation so the
@@ -250,6 +251,7 @@ export function App() {
   // `state.tunnelBanner.url`, and the equality check below no longer holds,
   // so the banner naturally reappears without any reducer changes.
   const [dismissedTunnelUrl, setDismissedTunnelUrl] = useState<string | null>(null);
+  const [transportFailedDismissed, setTransportFailedDismissed] = useState<boolean>(false);
 
   const startWsRef = useRef<(lastSeq: number) => void>(() => undefined);
   // CR-01: mirror joinLocked into a ref so the onClose closure (captured at
@@ -542,6 +544,13 @@ export function App() {
           }}
         />
       )}
+      {state.transportFailed !== null && !transportFailedDismissed && (
+        <TransportFailedBanner
+          message={state.transportFailed.message}
+          restartCount={state.transportFailed.restart_count}
+          onDismiss={() => setTransportFailedDismissed(true)}
+        />
+      )}
       {wsRetryCount >= RETRY_PROMPT_THRESHOLD && (
         <div className="reconnect-prompt" role="status">
           Having trouble reconnecting —{' '}
@@ -559,6 +568,9 @@ export function App() {
           onPicking={sendPicking}
           onChat={sendChat}
           wsConnected={wsConnected}
+          idleNudge={state.idleNudge}
+          roomEmpty={state.roomEmpty}
+          publicUrl={state.publicUrl}
         />
       ) : coordinatorMode && coordinatorStatus === 'invalid' ? (
         <div className="card coordinator-error" data-testid="coordinator-error" role="alert">

@@ -102,6 +102,142 @@ test('coordinator flow: participant suggestion → Record this → awaitAnswer u
   // NOTE: Do NOT call stopSession() — the fixture's finally block owns teardown.
 });
 
+// SYNC-01: awaitAnswer returns resolution object (value + picked_by) when the
+// answer is recorded via the web coordinator UI. This is the integration-level
+// gate for the full Phase 9 fix: web pick → server recordAnswer with
+// picked_by:'Coordinator' → TicketStore.resolve → awaitAnswer unblocks with
+// resolution data populated.
+test('SYNC-01: web coordinator pick → awaitAnswer resolution carries value and picked_by', async ({
+  session,
+  browser,
+}) => {
+  test.setTimeout(30_000);
+
+  const participantCtx = await browser.newContext();
+  const coordinatorCtx = await browser.newContext();
+  const participant = await participantCtx.newPage();
+  const coordinator = await coordinatorCtx.newPage();
+
+  try {
+    // Open coordinator tab first so they can approve the participant.
+    await coordinator.goto(session.coordinator_url);
+    await expect(coordinator.getByTestId('coordinator-page')).toBeVisible({ timeout: 10_000 });
+
+    // Participant joins and waits for approval.
+    await participant.goto(session.public_url);
+    await expect(participant.getByLabel(/display name/i)).toBeVisible();
+    await participant.getByLabel(/display name/i).fill('Bob');
+    await participant.getByRole('button', { name: /^continue$/i }).click();
+    await expect(participant.getByTestId('join-waiting')).toBeVisible({ timeout: 10_000 });
+
+    // Coordinator approves.
+    await expect(
+      coordinator.getByRole('button', { name: /approve bob/i }),
+    ).toBeVisible({ timeout: 10_000 });
+    await coordinator.getByRole('button', { name: /approve bob/i }).click();
+    await expect(participant.getByTestId('join-waiting')).toBeHidden({ timeout: 10_000 });
+
+    // Post a question via the in-process MCP tool.
+    const ticket = askGroup({ question: 'Which database should we use?' }) as {
+      ticket_id: string;
+    };
+
+    // Participant submits a suggestion.
+    await expect(participant.getByText(/Which database should we use/)).toBeVisible({
+      timeout: 10_000,
+    });
+    await participant.getByPlaceholder('Your answer').fill('PostgreSQL');
+    await participant.getByRole('button', { name: /submit/i }).click();
+
+    // Coordinator sees the suggestion appear and picks it.
+    const card = coordinator.getByTestId(`coordinator-question-${ticket.ticket_id}`);
+    await expect(card).toBeVisible({ timeout: 10_000 });
+    const suggestion = card.getByText(/PostgreSQL/);
+    await expect(suggestion).toBeVisible({ timeout: 10_000 });
+    await card.getByRole('radio').first().check();
+    await coordinator.getByTestId('coordinator-record-suggestion').click();
+
+    // SYNC-01 core assertion: awaitAnswer must return resolved:true with a
+    // resolution object that carries the picked value and picked_by:'Coordinator'
+    // (the server hard-codes 'Coordinator' for all web coordinator picks in D-03).
+    const snap = await awaitAnswer({ ticket_id: ticket.ticket_id, timeout_s: 10 });
+    expect(snap.resolved).toBe(true);
+    expect(snap.resolution).toBeDefined();
+    expect(snap.resolution!.value).toBe('PostgreSQL');
+    expect(snap.resolution!.picked_by).toBe('Coordinator');
+
+    // Secondary check: the session decisions list includes the picked answer.
+    const decisions = mcpState.manager!.sessionView().decisions;
+    expect(decisions.some((d) => d.answer === 'PostgreSQL')).toBe(true);
+
+    // Coordinator card shows the resolved variant.
+    await expect(card.getByTestId('coordinator-resolved-marker')).toBeAttached({
+      timeout: 10_000,
+    });
+  } finally {
+    await participantCtx.close();
+    await coordinatorCtx.close();
+  }
+});
+
+// SYNC-02: a second coordinator pick on an already-resolved question must
+// return HTTP 409 and the card must remain in the resolved variant — no error
+// toast. This verifies the D-08 enriched 409 body reaches the card-flip path
+// in Coordinator.tsx (api.ts body-surfacing + patchCard resolvedBy branch).
+test('SYNC-02: second coordinator pick returns 409 and card stays in resolved variant', async ({
+  session,
+  browser,
+}) => {
+  test.setTimeout(30_000);
+
+  const coordinatorCtx = await browser.newContext();
+  const coordinator = await coordinatorCtx.newPage();
+
+  try {
+    await coordinator.goto(session.coordinator_url);
+    await expect(coordinator.getByTestId('coordinator-page')).toBeVisible({ timeout: 10_000 });
+
+    // Post a question — no participant needed; coordinator can free-text answer directly.
+    const ticket = askGroup({ question: 'Should we use TypeScript?' }) as { ticket_id: string };
+
+    const card = coordinator.getByTestId(`coordinator-question-${ticket.ticket_id}`);
+    await expect(card).toBeVisible({ timeout: 10_000 });
+
+    // First pick: coordinator uses the override path (no participants, so the
+    // suggestion radio group is empty; override is always available).
+    await card.getByTestId('coordinator-override-textarea').fill('Yes, TypeScript');
+    await coordinator.getByTestId('coordinator-record-override').click();
+
+    // Wait for the card to flip to resolved (first pick succeeded).
+    await expect(card.getByTestId('coordinator-resolved-marker')).toBeAttached({
+      timeout: 10_000,
+    });
+
+    // Second pick attempt: POST directly from the coordinator's browser context
+    // (carries the sb_c cookie set during coordinator join). Must return 409.
+    const secondPickStatus = await coordinator.evaluate(
+      async ({ ticketId }) => {
+        const res = await fetch('/api/coordinator/answer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ ticket_id: ticketId, value: 'No, plain JS', source: 'synthesis' }),
+        });
+        return res.status;
+      },
+      { ticketId: ticket.ticket_id },
+    );
+    expect(secondPickStatus).toBe(409);
+
+    // Card must still show the resolved variant (no error toast replacing it).
+    await expect(card.getByTestId('coordinator-resolved-marker')).toBeAttached({
+      timeout: 10_000,
+    });
+  } finally {
+    await coordinatorCtx.close();
+  }
+});
+
 test('kick flow: coordinator kicks participant → participant sees join-removed screen', async ({
   session,
   browser,

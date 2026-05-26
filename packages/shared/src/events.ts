@@ -58,6 +58,8 @@ const ResolutionSchema = z.object({
   value: z.string(),
   source: z.enum(['suggestion', 'synthesis', 'override']),
   recorded_at: z.string(),
+  // Phase 9 (SYNC-01): server-derived picker identity; absent for pre-Phase-9 events.
+  picked_by: z.string().optional(),
 });
 
 const QuestionSchema = z.object({
@@ -103,6 +105,8 @@ export const ServerEvent = z.discriminatedUnion('type', [
       session: SessionViewSchema,
       you: ParticipantSchema.optional(),
       is_coordinator: z.boolean(),
+      // Phase 14 (SHARE-01): participant join URL sent in welcome; absent for pre-Phase-14 servers
+      public_url: z.string().url().optional(),
     }),
   ),
   Envelope('participant_joined', z.object({ participant: ParticipantSchema })),
@@ -151,6 +155,20 @@ export const ServerEvent = z.discriminatedUnion('type', [
     'session_status_changed',
     z.object({ status: z.enum(['waiting', 'question_open', 'choosing', 'done']) }),
   ),
+  // Phase 11 (ROOM-02): server fires after idleNudgeWindowMs with no participant activity
+  Envelope(
+    'room_idle_nudge',
+    z.object({
+      question_id: z.string(),
+    }),
+  ),
+  // Phase 11 (ROOM-03): fires on 0→N and N→0 approved-connected participant transitions
+  Envelope(
+    'room_empty_changed',
+    z.object({
+      is_empty: z.boolean(),
+    }),
+  ),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
 
@@ -161,6 +179,8 @@ export const EphemeralFrame = z.discriminatedUnion('type', [
       session: SessionViewSchema,
       you: ParticipantSchema.optional(),
       is_coordinator: z.boolean(),
+      // Phase 14 (SHARE-01): participant join URL sent in welcome; absent for pre-Phase-14 servers
+      public_url: z.string().url().optional(),
     }),
   }),
   z.object({ type: z.literal('heartbeat') }),

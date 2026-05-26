@@ -92,7 +92,21 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
    - **Clarifications are separate from suggestions** — they are informational context only. Do not include clarification text in the suggestion tally; do not present them as answer options.
    - `answerClarification` still works after `recordAnswer` (terminal fallback) — you can answer late clarifications for context.
 
-5. **Present to the initiator and get their pick**
+5. **Check resolved (stop-on-resolved guard)**
+
+   After each `awaitAnswer` call, **check the `resolved` field before doing anything else**.
+
+   **Important:** Check `resolved` is `true` BEFORE accessing `resolution.value` — when `resolved` is `false`, the `resolution` field is absent. (Pitfall 7 guard.)
+
+   - **If `resolved` is `true`:** The question has already been answered by a teammate or coordinator via the browser. The answer is in `resolution.value`. Do the following:
+     - Print the confirmation line to the terminal: `Team picked: {resolution.value} (chosen in browser by {resolution.picked_by})`
+     - Proceed with `resolution.value` as the final answer.
+     - **Do NOT call `AskUserQuestion`** — the initiator does not need to re-pick; the answer is already chosen.
+     - **Do NOT call `recordAnswer`** — the answer is already recorded server-side. Calling `recordAnswer` after a browser pick would be a no-op at best and may return `{ ok: false, reason: 'already_resolved' }`, which means you lost a race — proceed with `resolution.value` regardless.
+
+   - **If `resolved` is `false`:** Continue to step 6 (present to the initiator) as normal.
+
+6. **Present to the initiator and get their pick**
    Use Claude Code's built-in `AskUserQuestion` to show the initiator what the team said. Guidelines:
    - **Option-style questions**: tally votes from suggestions; list each option with its tally; recommend the leader.
    - **Free-text questions, 0 suggestions**: ask the initiator to either wait longer or write the answer themselves.
@@ -101,7 +115,7 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
    - Always include the participant's name when quoting their suggestion ("Alice: X").
    - Never edit a participant's words when presenting their verbatim suggestion.
 
-5. **Record the answer**
+7. **Record the answer**
    ```
    recordAnswer({
      ticket_id,
@@ -115,9 +129,11 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
    - `'synthesis'` — initiator picked your synthesised answer.
    - `'override'` — initiator wrote a new answer that wasn't on the menu.
 
+   `recordAnswer` is reserved for **agent-driven answers only** (the agent's own synthesis or initiator override). If `recordAnswer` returns `{ ok: false, reason: 'already_resolved', resolution }`, you lost a race — use `resolution.value` and proceed, do not re-prompt the initiator.
+
    The decision is written to the transcript. The current question closes; you can now `askGroup` again.
 
-6. **Stop the session**
+8. **Stop the session**
    When done, call `stopSession`. The full transcript (every event, every question, every suggestion/comment, every decision) is written to `~/.shared-brainstorm/sessions/`.
 
 ## Fallback

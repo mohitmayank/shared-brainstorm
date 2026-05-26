@@ -12,6 +12,9 @@ interface CoordinatorQuestionCardProps {
   error: string | null;
   // Coordinator-as-planner: free-text answer the coordinator contributes to the pool.
   addAnswerText: string;
+  // D-08: locally-patched resolution for the rejected-pick → resolved flip path.
+  // Distinct from question.resolution which comes via WS events.
+  resolvedBy?: { value: string; source: string; picked_by: string };
   onSelectSuggestion: (suggestionId: string) => void;
   onChangeOverride: (text: string) => void;
   onRecordSuggestion: () => void;
@@ -41,6 +44,7 @@ export function CoordinatorQuestionCard({
   recording,
   error,
   addAnswerText,
+  resolvedBy,
   onSelectSuggestion,
   onChangeOverride,
   onRecordSuggestion,
@@ -49,6 +53,16 @@ export function CoordinatorQuestionCard({
   onAddAnswer,
 }: CoordinatorQuestionCardProps) {
   const isResolved = question.status === 'resolved';
+  // D-08: prefer question.resolution (WS path), fall back to resolvedBy (409 flip path).
+  const effectiveResolution = question.resolution ?? resolvedBy ?? null;
+  // D-08: a 409 flip sets resolvedBy before the question_resolved WS event flips
+  // question.status — so `isResolved` alone leaves the pick UI live in the gap
+  // (worst in the degraded-WS case where 409s happen). `settled` closes that
+  // window: the question is decided once EITHER signal lands, so the Record
+  // buttons disappear and suggestion rows lock immediately on the flip.
+  const settled = isResolved || !!resolvedBy;
+  // Attribution: picked_by may be absent for pre-Phase-9 events — degrade gracefully.
+  const who = effectiveResolution?.picked_by;
   const { suggestions, comments } = question;
   // Coordinator-as-planner: when the question carries options, the coordinator
   // picks from them like any participant (QuestionCard) instead of retyping a
@@ -119,10 +133,12 @@ export function CoordinatorQuestionCard({
         </div>
       )}
 
-      {isResolved && question.resolution && (
+      {settled && effectiveResolution && (
         <p style={{ marginBottom: '.5rem' }}>
-          <strong>✓ Decided: {question.resolution.value}</strong>
-          <span className="muted"> by Initiator ({question.resolution.source})</span>
+          <strong>✓ Decided: {effectiveResolution.value}</strong>
+          <span className="muted">
+            {' '}chosen{who ? ` by ${who}` : ''} ({effectiveResolution.source})
+          </span>
           <span
             tabIndex={-1}
             data-testid="coordinator-resolved-marker"
@@ -142,8 +158,8 @@ export function CoordinatorQuestionCard({
               suggestion={s}
               participantName={nameForSuggestion(s)}
               ticketId={question.ticket_id}
-              isSelected={!isResolved && selectedSuggestionId === s.id}
-              disabled={isResolved || recording}
+              isSelected={!settled && selectedSuggestionId === s.id}
+              disabled={settled || recording}
               index={i}
               onSelect={() => onSelectSuggestion(s.id)}
             />
@@ -202,7 +218,7 @@ export function CoordinatorQuestionCard({
         </div>
       )}
 
-      {!isResolved && (
+      {!settled && (
         <>
           <h3>Pick the final answer</h3>
           <div className="coordinator-pick-actions">

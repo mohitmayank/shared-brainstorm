@@ -14,7 +14,10 @@ When the user runs `/shared-brainstorm` or asks to "brainstorm with the team":
    - **WARNING: do NOT include `coordinator_url` in the message you send to teammates.** Anyone who opens that URL becomes the session coordinator. Share only `public_url` with the team.
 2. For each question:
    - Call `ask_group({ question, options?, recommendation? })` to get a `ticket_id`
-   - Loop `await_answer({ ticket_id, timeout_s: 50 })` until `status !== "pending"`
+   - Loop `await_answer({ ticket_id, timeout_s: 50 })` until activity or timeout
+   - After each return, **check `resolved`**:
+     - If `resolved` is `true`: stop polling immediately — the answer was picked in the browser. Use `resolution.value` as the final answer. Do NOT call `record_answer` (the pick is already recorded server-side; calling it would return `{ ok: false, reason: 'already_resolved' }`).
+     - If `resolved` is `false`: continue polling, or when discussion has settled, present the suggestions to the user and call `record_answer` with their pick.
 3. Use the chosen answer verbatim in your plan.
 4. Call `stop_session` when done.
 

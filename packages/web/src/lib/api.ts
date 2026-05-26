@@ -6,10 +6,11 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'unknown' }));
-    throw Object.assign(new Error(String((err as { error?: string }).error ?? res.status)), {
-      status: res.status,
-    });
+    const body = await res.json().catch(() => ({ error: 'unknown' }));
+    throw Object.assign(
+      new Error(String((body as { error?: string }).error ?? res.status)),
+      { status: res.status, body }, // D-08: attach body for 409 resolution
+    );
   }
   return res.json() as Promise<T>;
 }

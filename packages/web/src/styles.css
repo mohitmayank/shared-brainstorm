@@ -397,3 +397,101 @@ ul.suggestions li, ul.comments li {
 .chat-compose {
   margin-top: .5rem;
 }
+
+/* ----- Phase 11: Idle & Empty Room Detection ----------------------------
+   All additive on existing tokens. No new color values, no new font-faces,
+   no @media rules (UI-SPEC §"New selectors to be added"). */
+
+.idle-nudge-banner {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: .6rem .9rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: .9rem;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+.idle-nudge-text { color: var(--text); }
+.idle-nudge-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  margin-left: auto;
+}
+.idle-nudge-dismiss {
+  padding: .15rem .5rem;
+  font-size: 1rem;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+.idle-nudge-dismiss:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+/* .empty-room-notice is a zero-rule passthrough — inherits .card entirely */
+.empty-room-notice {}
+
+/* ----- Phase 12: Tunnel Failure Surfacing --------------------------------
+   All additive on existing tokens. Uses --error tint with @supports fallback
+   for browsers without color-mix (Safari <16.2, Firefox <113). */
+
+.transport-failed-banner {
+  background: color-mix(in srgb, var(--error) 10%, var(--surface));
+  border: 1.5px solid color-mix(in srgb, var(--error) 40%, transparent);
+  padding: .6rem .9rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: .9rem;
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+@supports not (color: color-mix(in srgb, red 10%, white)) {
+  .transport-failed-banner {
+    background: var(--banner-bg);
+    border-color: var(--error);
+  }
+}
+.transport-failed-detail {
+  font-size: .875rem;
+  color: var(--text-muted);
+  margin-top: .25rem;
+}
+.transport-failed-recovery {
+  font-size: .875rem;
+  color: var(--text-muted);
+  margin-top: .25rem;
+}
+.transport-failed-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  margin-left: auto;
+}
+.transport-failed-dismiss {
+  padding: .15rem .5rem;
+  font-size: 1rem;
+  line-height: 1;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+}
+.transport-failed-dismiss:hover {
+  color: var(--text);
+  border-color: var(--border);
+}
+
+/* ----- Phase 14: Share Planner Link -----------------------------------
+   All additive on existing tokens. No new color values, no new font-faces,
+   no @media rules. */
+.share-link { display: inline-flex; align-items: center; gap: .35rem; }
+.share-link-button { padding: .25rem .75rem; font-size: .875rem; }
+.share-link-button:hover { opacity: .85; }
+.share-link-copied { font-size: .8rem; color: var(--text-muted); }

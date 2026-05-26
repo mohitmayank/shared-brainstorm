@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { copyToClipboardWithFallback } from '../lib/clipboard.js';
 
 /**
  * Dismissable banner shown when the server emits `tunnel_url_changed`
@@ -22,42 +23,6 @@ export interface TunnelBannerProps {
   onCopy?: () => void;
 }
 
-async function copyToClipboardWithFallback(url: string): Promise<boolean> {
-  // Prefer the standards-track API. In secure contexts (HTTPS, localhost)
-  // this is available; under Playwright we grant the `clipboard-write`
-  // permission in the spec's browser context so this path works.
-  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(url);
-      return true;
-    } catch {
-      // Permission denied or some other failure — fall through to the
-      // execCommand path below rather than surfacing a hard error.
-    }
-  }
-  // Fallback: stage the URL in a hidden textarea, select, exec the deprecated
-  // `copy` command. Still works in older Chromium and avoids requiring the
-  // newer Clipboard API permission grant.
-  if (typeof document === 'undefined') return false;
-  const ta = document.createElement('textarea');
-  ta.value = url;
-  ta.setAttribute('readonly', '');
-  ta.style.position = 'absolute';
-  ta.style.left = '-9999px';
-  document.body.appendChild(ta);
-  ta.select();
-  let ok = false;
-  try {
-    // `execCommand` is deprecated but still implemented in all browsers and is
-    // the only synchronous copy mechanism that works without the Clipboard
-    // API permission. The standards-track path above is preferred.
-    ok = document.execCommand('copy');
-  } catch {
-    ok = false;
-  }
-  document.body.removeChild(ta);
-  return ok;
-}
 
 export function TunnelBanner({ url, onDismiss, onCopy }: TunnelBannerProps) {
   const [copied, setCopied] = useState<boolean>(false);

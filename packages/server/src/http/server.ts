@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { SessionManager } from '../session/SessionManager.js';
 import type { Participant, ParticipantId, QuestionId } from '@shared-brainstorm/shared';
+import { CoordinatorAnswerErrorBody } from '@shared-brainstorm/shared';
 import {
   readCoordinatorCookie,
   readParticipantCookie,
@@ -255,7 +256,15 @@ export function buildApp({
       // "already_resolved" error rather than a confusing 404 "ticket_not_found".
       try {
         if (manager.isTerminalTicket(parsed.data.ticket_id)) {
-          return c.json({ error: 'already_resolved' }, 409);
+          // D-08: enrich 409 body with resolution so the coordinator card can flip.
+          // WR-02: validate the body against the shared wire schema before
+          // returning so a getTerminalResolution shape drift fails loudly here.
+          const termRes = manager.getTerminalResolution(parsed.data.ticket_id);
+          const body = CoordinatorAnswerErrorBody.parse({
+            error: 'already_resolved',
+            ...(termRes ? { resolution: termRes } : {}),
+          });
+          return c.json(body, 409);
         }
       } catch {
         return c.json({ error: 'session_ended' }, 404);
@@ -263,26 +272,43 @@ export function buildApp({
       return c.json({ error: 'ticket_not_found' }, 404);
     }
     try {
+      // D-01: pass picked_by: 'Coordinator' to attribute browser picks
       manager.recordAnswer({
         question_id: cq.id as QuestionId,
         value: parsed.data.value,
         source: parsed.data.source,
+        picked_by: 'Coordinator',
       });
       return c.json({ ok: true });
     } catch (e) {
-      const msg = (e as Error).message;
       // Double-resolve race (Pitfall 4): a second pick for an already-resolved
       // question maps to 409, never a 500. This branch covers the same-tick race
-      // where the question is still in open_questions but its status was mutated
-      // externally (e.g. direct test manipulation). In normal flow, isTerminalTicket
-      // above handles the post-delete path.
-      if (
-        msg.includes('no matching') ||
-        msg.includes('not broadcast') ||
-        msg.includes('not open') ||
-        msg.includes('no open question')
-      ) {
-        return c.json({ error: 'already_resolved' }, 409);
+      // where recordAnswer threw because the question was concurrently resolved
+      // (it has since landed in terminalQuestions). In normal flow, the
+      // isTerminalTicket short-circuit above handles the post-delete path.
+      //
+      // WR-03: classify via the structured isTerminalTicket() accessor rather
+      // than brittle Error.message substring matching (the old `'no matching'`
+      // / `'not open'` strings matched nothing the current code throws, and any
+      // message reword would silently demote a real race to a 500). Only
+      // genuinely-unexpected errors fall through to the re-throw.
+      let terminal = false;
+      try {
+        terminal = manager.isTerminalTicket(parsed.data.ticket_id);
+      } catch {
+        // Session torn down between recordAnswer and this re-check — surface
+        // session_ended rather than mis-classifying as a 500.
+        return c.json({ error: 'session_ended' }, 404);
+      }
+      if (terminal) {
+        // D-08: enrich 409 body with resolution (same-tick race path).
+        // WR-02: validate against the shared wire schema before returning.
+        const termRes = manager.getTerminalResolution(parsed.data.ticket_id);
+        const body = CoordinatorAnswerErrorBody.parse({
+          error: 'already_resolved',
+          ...(termRes ? { resolution: termRes } : {}),
+        });
+        return c.json(body, 409);
       }
       throw e;
     }

@@ -122,13 +122,35 @@ export type AnswerClarificationInput = z.infer<typeof AnswerClarificationInput>;
 export const AnswerClarificationOutput = z.object({ ok: z.literal(true) });
 export type AnswerClarificationOutput = z.infer<typeof AnswerClarificationOutput>;
 
+// Phase 9 (SYNC-01): resolution is present only when resolved:true — optional for backwards-compat.
+export const AwaitAnswerResolution = z.object({
+  value: z.string(),
+  source: z.enum(['suggestion', 'synthesis', 'override']),
+  picked_by: z.string(),
+});
+export type AwaitAnswerResolution = z.infer<typeof AwaitAnswerResolution>;
+
 export const AwaitAnswerOutput = z.object({
   suggestions: z.array(SuggestionEntry),
   comments: z.array(CommentEntry),
   clarifications: z.array(ClarificationEntry), // Phase 7 (CHATAI-01): additive
   resolved: z.boolean(),
+  resolution: AwaitAnswerResolution.optional(), // Phase 9 (SYNC-01): only present when resolved:true
 });
 export type AwaitAnswerOutput = z.infer<typeof AwaitAnswerOutput>;
+
+// Phase 9 (WR-02): shared wire contract for the 409 "already_resolved" body
+// returned by POST /api/coordinator/answer (D-08). Schema-first per the
+// codebase convention ("all wire schemas are Zod") — both the server (which
+// builds the body) and the web client (which narrows the caught body) parse
+// against this instead of using raw objects / `as` casts, so any shape drift
+// surfaces deterministically. `resolution` is optional: an older server, or a
+// teardown race where the terminal resolution is no longer readable, omits it.
+export const CoordinatorAnswerErrorBody = z.object({
+  error: z.literal('already_resolved'),
+  resolution: AwaitAnswerResolution.optional(),
+});
+export type CoordinatorAnswerErrorBody = z.infer<typeof CoordinatorAnswerErrorBody>;
 
 export const RecordAnswerInput = z.object({
   ticket_id: z.string(),
@@ -137,9 +159,16 @@ export const RecordAnswerInput = z.object({
 });
 export type RecordAnswerInput = z.infer<typeof RecordAnswerInput>;
 
-export const RecordAnswerOutput = z.object({
-  ok: z.literal(true),
-});
+// Phase 9 (SYNC-02): widened from z.literal(true) to discriminated union — additive backwards-compat.
+// ok:true path is unchanged; ok:false path surfaces when the agent loses a race to a web pick.
+export const RecordAnswerOutput = z.discriminatedUnion('ok', [
+  z.object({ ok: z.literal(true) }),
+  z.object({
+    ok: z.literal(false),
+    reason: z.literal('already_resolved'),
+    resolution: AwaitAnswerResolution, // reuse D-01 shape for consistency
+  }),
+]);
 export type RecordAnswerOutput = z.infer<typeof RecordAnswerOutput>;
 
 export const StopSessionOutput = z.object({

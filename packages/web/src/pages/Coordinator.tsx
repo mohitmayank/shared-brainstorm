@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { CoordinatorAnswerErrorBody } from '@shared-brainstorm/shared';
 import type { WireSession, WireParticipant, WireSuggestion } from '../state.js';
 import {
   postCoordinatorAnswer,
@@ -11,6 +12,9 @@ import { DecisionsPanel } from '../components/coordinator/DecisionsPanel.js';
 import { CoordinatorQuestionCard } from '../components/coordinator/CoordinatorQuestionCard.js';
 import { SessionStatusPill } from '../components/SessionStatusPill.js';
 import { ChatPanel } from '../components/ChatPanel.js';
+import { IdleNudgeBanner } from '../components/IdleNudgeBanner.js';
+import { EmptyRoomNotice } from '../components/EmptyRoomNotice.js';
+import { ShareLinkButton } from '../components/ShareLinkButton.js';
 
 interface CoordinatorProps {
   session: WireSession;
@@ -22,6 +26,15 @@ interface CoordinatorProps {
   onChat: (text: string) => void;
   /** WR-03: whether the WS is currently open — gates the ChatPanel Send affordance. */
   wsConnected: boolean;
+  /** Phase 11 (ROOM-02): set when server emits room_idle_nudge for the current question. */
+  idleNudge: { question_id: string } | null;
+  /** Phase 11 (ROOM-03): set when all approved participants have disconnected. */
+  roomEmpty: boolean;
+  /**
+   * Phase 14 (SHARE-01/02): participant join URL from UiState.publicUrl; null when server is
+   * pre-Phase-14 or URL not yet known. When non-null, renders the ShareLinkButton in the header.
+   */
+  publicUrl: string | null;
 }
 
 /** Per-ticket pick UI state (UI-SPEC Per-Component Contract). */
@@ -33,6 +46,9 @@ interface CardState {
   // Coordinator-as-planner: in-progress free-text answer the coordinator is
   // contributing to the suggestion pool (separate from the override text).
   addAnswerText: string;
+  // D-08: locally-patched resolution for the rejected-pick → resolved flip.
+  // Distinct from question.resolution which comes via WS events.
+  resolvedBy?: { value: string; source: string; picked_by: string };
 }
 
 const EMPTY_CARD: CardState = {
@@ -63,9 +79,13 @@ function nameFor(participants: WireParticipant[], id: string): string {
  * flips to resolved purely from the incoming `question_resolved` WS event
  * (handled by the reducer) — this component only drives the POST + error copy.
  */
-export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onChat, wsConnected }: CoordinatorProps) {
+export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onChat, wsConnected, idleNudge, roomEmpty, publicUrl }: CoordinatorProps) {
   const openQuestions = session.questions ?? [];
   const [cards, setCards] = useState<Record<string, CardState>>({});
+  // Phase 11 (ROOM-02): dismiss-ack keyed by question_id. Re-arms automatically when
+  // a room_idle_nudge for a different question arrives (new question_id breaks equality).
+  // Mirrors the dismissedTunnelUrl pattern in App.tsx (Pitfall 3).
+  const [dismissedIdleNudgeQuestionId, setDismissedIdleNudgeQuestionId] = useState<string | null>(null);
 
   // WR-02/WR-03: per-ticket fallback-timer handles. Keyed by ticket so a new
   // record supersedes its predecessor, a resolved question clears its own
@@ -204,11 +224,28 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
       } catch (e: unknown) {
         onPicking(ticketId, 'stop'); // PRES-03: clear 'choosing' on failure so participants aren't stuck
         const status = (e as { status?: number }).status;
-        const msg =
-          status === 409
-            ? 'That question was already resolved.'
-            : `Couldn't record that answer — try again. (${status ?? 'network'})`;
-        patchCard(ticketId, { recording: false, error: msg });
+        if (status === 409) {
+          // D-08: read winning resolution and flip card to resolved variant instead
+          // of showing the dead-end "already resolved" error toast (UI-SPEC).
+          // WR-02: narrow the caught body with the shared Zod schema instead of an
+          // `as` cast so a server-side shape drift fails the safeParse (→ generic
+          // error copy) rather than silently producing an undefined resolution.
+          const parsedBody = CoordinatorAnswerErrorBody.safeParse((e as { body?: unknown }).body);
+          if (parsedBody.success && parsedBody.data.resolution) {
+            // Pitfall 3 (WR-06): clear fallback timer BEFORE patching so it cannot
+            // re-enable recording on a now-terminal card.
+            clearFallbackTimer(ticketId);
+            patchCard(ticketId, { recording: false, resolvedBy: parsedBody.data.resolution });
+            return;
+          }
+          // Fallback: no resolution in body (old server without D-08) — show error copy.
+          patchCard(ticketId, { recording: false, error: 'That question was already resolved.' });
+          return;
+        }
+        patchCard(ticketId, {
+          recording: false,
+          error: `Couldn't record that answer — try again. (${status ?? 'network'})`,
+        });
       }
     },
     [patchCard, clearFallbackTimer, onPicking],
@@ -265,6 +302,10 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
       <div className="card coordinator-header">
         <h1>shared-brainstorm — coordinator</h1>
         <SessionStatusPill status={sessionStatus} />
+        {idleNudge !== null && idleNudge.question_id !== dismissedIdleNudgeQuestionId && (
+          <IdleNudgeBanner onDismiss={() => setDismissedIdleNudgeQuestionId(idleNudge.question_id)} />
+        )}
+        {publicUrl !== null && <ShareLinkButton publicUrl={publicUrl} />}
         <p className="muted" style={{ marginBottom: '.5rem' }}>
           {session.brief}
         </p>
@@ -326,6 +367,10 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
       />
 
       <div aria-live="polite" aria-relevant="additions text">
+        {/* Phase 11 (ROOM-03): show empty-room notice above question cards when all approved participants left */}
+        {roomEmpty && openQuestions.some((q) => q.status === 'broadcast') && (
+          <EmptyRoomNotice />
+        )}
         {openQuestions.length > 0 ? (
           <div data-testid="batch-question-list">
             {/* Gate the hint on UNRESOLVED questions only — once a batch is partially
@@ -347,6 +392,9 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
                 recording={cardFor(q.ticket_id).recording}
                 error={cardFor(q.ticket_id).error}
                 addAnswerText={cardFor(q.ticket_id).addAnswerText}
+                {...(cardFor(q.ticket_id).resolvedBy !== undefined
+                  ? { resolvedBy: cardFor(q.ticket_id).resolvedBy }
+                  : {})}
                 onSelectSuggestion={(suggestionId) => onSelectSuggestion(q.ticket_id, suggestionId)}
                 onChangeOverride={(text) => onChangeOverride(q.ticket_id, text)}
                 onRecordSuggestion={() => onRecordSuggestion(q.ticket_id, q.suggestions)}

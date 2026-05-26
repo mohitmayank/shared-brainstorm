@@ -156,9 +156,32 @@ export async function startSession(
   const transcriptDir =
     opts?.transcriptDir ?? join(homedir(), '.shared-brainstorm', 'sessions');
 
+  // Phase 11 (ROOM-02): configurable idle nudge window. isTruthyEnv is boolean-only;
+  // use parseInt for this numeric env var.
+  // IN-02: reject non-positive / non-finite values — parseInt only guards NaN, so
+  // `SHARED_BRAINSTORM_IDLE_NUDGE_MS=0` or a negative value would otherwise reach
+  // setTimeout and fire near-immediately, turning the nudge into a broadcast loop
+  // on every arm. Invalid values fall back to the 120 000 ms default with a warn
+  // (mirrors the SHARED_BRAINSTORM_BIND reject-with-warning pattern below).
+  const idleNudgeWindowMsRaw = process.env['SHARED_BRAINSTORM_IDLE_NUDGE_MS'];
+  const idleNudgeWindowMsParsed =
+    idleNudgeWindowMsRaw !== undefined ? parseInt(idleNudgeWindowMsRaw, 10) : undefined;
+  const idleNudgeWindowMs =
+    idleNudgeWindowMsParsed !== undefined &&
+    Number.isFinite(idleNudgeWindowMsParsed) &&
+    idleNudgeWindowMsParsed > 0
+      ? idleNudgeWindowMsParsed
+      : undefined;
+  if (idleNudgeWindowMsRaw !== undefined && idleNudgeWindowMs === undefined) {
+    console.warn(
+      `⚠  SHARED_BRAINSTORM_IDLE_NUDGE_MS=${idleNudgeWindowMsRaw} ignored: must be a positive integer (ms); falling back to default 120000`,
+    );
+  }
+
   const manager = new SessionManager({
     clock: realClock,
     transcriptDir,
+    ...(idleNudgeWindowMs !== undefined ? { idleNudgeWindowMs } : {}),
   });
 
   const { session_id } = manager.start({ brief: input.brief });
@@ -235,6 +258,10 @@ export async function startSession(
   // via a thunk so the flip propagates to subsequent /api/join requests
   // without needing to rebuild the Hono app.
   http.setSecureCookie(transportInfo.secureCookie);
+  // Phase 14 (SHARE-01): propagate the participant join URL to the WS router so
+  // welcome frames include public_url for browser clients. Called here (post-transport)
+  // because publicUrl is unknown at HTTP boot time (boot order: HTTP → transport → publicUrl).
+  http.setPublicUrl(publicUrl);
 
   // Reset transport-failure state BEFORE wiring the onError callback. This
   // ensures a fresh session starts clean even if a prior session ended via
@@ -246,6 +273,9 @@ export async function startSession(
   // Wire URL-change callback so transport can update mcpState.publicUrl
   transport.onUrlChange((newUrl) => {
     mcpState.publicUrl = newUrl;
+    // Phase 14 (SHARE-01): keep welcome frames current for reconnecting clients
+    // after a mid-session tunnel URL change.
+    http.setPublicUrl(newUrl);
     manager.emitExternal({
       type: 'tunnel_url_changed',
       payload: { public_url: newUrl },
@@ -274,7 +304,11 @@ export async function startSession(
     };
     // eslint-disable-next-line no-console
     console.error(
-      `⚠  Cloudflared tunnel permanently down after ${reason.restart_count} restart attempts. Last error: ${reason.message}`,
+      `⚠  Tunnel permanently unavailable — cloudflared could not reconnect after ` +
+        `${reason.restart_count} restart(s). The tunnel is down. Recovery: stop and restart ` +
+        `the session (stopSession, then startSession). Cloudflared failures are usually a ` +
+        `firewall or network blocking outbound HTTPS. If teammates are on the same network, ` +
+        `they can use the local URL while cloudflared is unavailable.`,
     );
     // Cast through `unknown` because the generic `Envelope<P>` helper in
     // packages/shared/src/events.ts erases the `type` literal at d.ts
@@ -386,14 +420,21 @@ export function recordAnswer(raw: unknown): RecordAnswerOutput {
   // Phase 6: look up in questions[] array by ticket_id (supports N concurrent questions)
   const q = view.questions.find((q) => q.ticket_id === input.ticket_id);
   if (!q) {
+    // D-03: already resolved — check terminal questions before throwing
+    const termRes = mgr.getTerminalResolution(input.ticket_id);
+    if (termRes) {
+      return RecordAnswerOutput.parse({ ok: false, reason: 'already_resolved', resolution: termRes });
+    }
     throw new Error(
-      `record_answer: ticket_id ${input.ticket_id} not found in open questions`,
+      `record_answer: ticket_id ${input.ticket_id} not found in open or terminal questions`,
     );
   }
+  // Happy path: pass picked_by: 'Initiator' to attribute CLI picks (D-03)
   mgr.recordAnswer({
     question_id: q.id as QuestionId,
     value: input.value,
     source: input.source,
+    picked_by: 'Initiator',
   });
   return RecordAnswerOutput.parse({ ok: true });
 }

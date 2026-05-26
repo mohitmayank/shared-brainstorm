@@ -250,3 +250,76 @@ describe('AnyFrame', () => {
     expect(ok.success).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 14 (SHARE-01): WelcomePayload optional public_url field — Wave 0 stubs
+// ---------------------------------------------------------------------------
+// NOTE: These tests will FAIL until Plan 14-02 adds `public_url: z.string().url().optional()`
+// to the ServerEvent / EphemeralFrame welcome payload schemas. That is expected Wave 0
+// behavior — they define the contract that 14-02 satisfies.
+
+describe('WelcomePayload public_url (Phase 14 SHARE-01)', () => {
+  // ServerEvent (seq-carrying durable form) cases
+  it('accepts welcome event with public_url field', () => {
+    const ok = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, public_url: 'https://join.example/' },
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) {
+      expect((ok.data.payload as Record<string, unknown>).public_url).toBe('https://join.example/');
+    }
+  });
+
+  it('accepts welcome event without public_url field (back-compat)', () => {
+    const ok = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, you: youShape, is_coordinator: false },
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('rejects welcome event with non-URL public_url', () => {
+    const bad = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, public_url: 'not-a-url' },
+    });
+    expect(bad.success).toBe(false);
+  });
+
+  // EphemeralFrame (no seq) parallel cases
+  it('EphemeralFrame: accepts welcome with public_url', () => {
+    const ok = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, public_url: 'https://join.example/' },
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) {
+      expect((ok.data as { payload: Record<string, unknown> }).payload.public_url).toBe(
+        'https://join.example/',
+      );
+    }
+  });
+
+  it('EphemeralFrame: accepts welcome without public_url (back-compat)', () => {
+    const ok = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, you: youShape, is_coordinator: false },
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('EphemeralFrame: rejects welcome with non-URL public_url', () => {
+    const bad = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, public_url: 'not-a-url' },
+    });
+    expect(bad.success).toBe(false);
+  });
+});

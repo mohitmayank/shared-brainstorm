@@ -313,7 +313,7 @@ describe('recordAnswer', () => {
       askGroup({ question: 'q?' });
       expect(() =>
         recordAnswer({ ticket_id: 'sb_t_bogus', value: 'A', source: 'override' }),
-      ).toThrow(/not found in open questions/);
+      ).toThrow(/not found in open or terminal questions/);
     } finally {
       await stopSession().catch(() => null);
       rmSync(dir, { recursive: true, force: true });
@@ -326,6 +326,82 @@ describe('recordAnswer', () => {
       await startSession({ brief: 'b' }, { transportFactory: 'mock', transcriptDir: dir });
       const result = askGroup({ question: 'Pick one' }) as { ticket_id: string };
       const out = recordAnswer({ ticket_id: result.ticket_id, value: 'Postgres', source: 'override' });
+      expect(out.ok).toBe(true);
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 (SYNC-02): Wave 0 stubs — recordAnswer race: ok:false path
+// These tests document the expected behaviour once Wave 2 implements
+// getTerminalResolution() on SessionManager and the tools.ts wrapper returns
+// { ok: false, reason: 'already_resolved', resolution } instead of throwing.
+// They are marked describe.skip because the production code does not exist yet;
+// Wave 2 will un-skip them.
+// ---------------------------------------------------------------------------
+describe('recordAnswer race: ok:false path (Wave 2 implementation)', () => {
+  it('D-03 (a): returns { ok: false, reason: "already_resolved", resolution } when ticket already resolved (web pick landed first)', async () => {
+    // Wave 0 stub — Wave 2 implements getTerminalResolution + tools.ts race path.
+    // Setup: start session → askGroup → resolve via HTTP coordinator pick → call
+    // recordAnswer MCP tool with the same ticket_id → expect ok:false NOT a throw.
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'race' }, { transportFactory: 'mock', transcriptDir: dir });
+      const { ticket_id } = askGroup({ question: 'Race question?' }) as { ticket_id: string };
+      const mgr = mcpState.manager!;
+      const qid = mgr.currentQuestion()!.id;
+      // Simulate web pick: resolve via domain recordAnswer (coordinator attribution)
+      mgr.recordAnswer({ question_id: qid, value: 'Web won', source: 'suggestion' });
+      // MCP tool wrapper must NOT throw — must return ok:false
+      const out = recordAnswer({ ticket_id, value: 'Initiator answer', source: 'override' });
+      expect(out.ok).toBe(false);
+      // Use cast through unknown to access the ok:false branch fields without TS narrowing issues
+      const failed = out as unknown as { ok: false; reason: string; resolution: { value: string; source: string; picked_by: string } };
+      expect(failed.reason).toBe('already_resolved');
+      expect(failed.resolution).toBeDefined();
+      expect(typeof failed.resolution.value).toBe('string');
+      expect(typeof failed.resolution.source).toBe('string');
+      expect(typeof failed.resolution.picked_by).toBe('string');
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('D-03 (b): resolution.picked_by is populated (non-empty string) on the ok:false response', async () => {
+    // Wave 0 stub — Wave 2 provides picked_by attribution in resolution.
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'race-pickedby' }, { transportFactory: 'mock', transcriptDir: dir });
+      const { ticket_id } = askGroup({ question: 'Who picks?' }) as { ticket_id: string };
+      const mgr = mcpState.manager!;
+      const qid = mgr.currentQuestion()!.id;
+      // Resolve with picked_by attribution (Wave 2 adds this param to recordAnswer)
+      // For now use the domain-level call — Wave 2 will pass picked_by through
+      mgr.recordAnswer({ question_id: qid, value: 'Team choice', source: 'suggestion' });
+      const out = recordAnswer({ ticket_id, value: 'Late', source: 'override' });
+      expect(out.ok).toBe(false);
+      // Use cast through unknown to access the ok:false branch fields without TS narrowing issues
+      const failed = out as unknown as { ok: false; resolution: { picked_by: string } };
+      expect(failed.resolution.picked_by).toBeTruthy();
+      expect(failed.resolution.picked_by.length).toBeGreaterThan(0);
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('D-03 (c): existing ok:true path — recordAnswer on a live open question still returns { ok: true }', async () => {
+    // Wave 0 stub — this is the happy path; must remain unchanged after Wave 2.
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'ok-true' }, { transportFactory: 'mock', transcriptDir: dir });
+      const { ticket_id } = askGroup({ question: 'Open question?' }) as { ticket_id: string };
+      // Question is still open — recordAnswer should succeed with ok:true
+      const out = recordAnswer({ ticket_id, value: 'Good answer', source: 'override' });
       expect(out.ok).toBe(true);
     } finally {
       await stopSession().catch(() => null);
@@ -567,6 +643,34 @@ describe('transport_failed (REL-03 wiring)', () => {
       const result = askGroup({ question: 'fresh question?' }) as { ticket_id: string };
       expect(result.ticket_id).toMatch(/^sb_t_/);
     } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('console.error on permanent failure contains honest recovery hint and no fake flag', async () => {
+    const dir = makeTmpDir();
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await startSession(
+        { brief: 'transport-failed console hint' },
+        { transportFactory: 'mock', transcriptDir: dir },
+      );
+      const cb = asMockTransport(mcpState.transport)._getOnErrorCb();
+      expect(cb).not.toBeNull();
+
+      cb!({
+        code: 'cloudflared_permanent_failure',
+        message: 'sim',
+        restart_count: 3,
+      });
+
+      expect(consoleSpy).toHaveBeenCalledOnce();
+      const msg = consoleSpy.mock.calls[0]?.[0] as string;
+      expect(msg).toContain('stop and restart');
+      expect(msg).not.toContain('--no-cloudflared');
+    } finally {
+      consoleSpy.mockRestore();
       await stopSession().catch(() => null);
       rmSync(dir, { recursive: true, force: true });
     }

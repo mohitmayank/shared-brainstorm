@@ -700,7 +700,9 @@ describe('CloudflaredTransport', () => {
       expect(msg).toContain('stderr_lines_seen:');
       expect(msg).toContain('last_stderr_line:');
       // Actionable text.
-      expect(msg).toContain('--no-cloudflared');
+      expect(msg).not.toContain('--no-cloudflared');
+      expect(msg).toContain('stop and restart the session');
+      expect(msg).toContain('outbound HTTPS');
       expect(msg).toContain('LAN mode');
       // Includes args (we passed `'tunnel'`).
       expect(msg).toContain('tunnel');

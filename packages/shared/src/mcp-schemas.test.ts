@@ -114,6 +114,50 @@ describe('MCP schemas', () => {
     expect(RecordAnswerOutput.safeParse({ ok: true }).success).toBe(true);
   });
 
+  // Phase 9 (SYNC-01 / SYNC-02): Wave 0 regression guards for widened schemas
+  it('AwaitAnswerOutput accepts resolution field when resolved:true', () => {
+    expect(
+      AwaitAnswerOutput.safeParse({
+        suggestions: [],
+        comments: [],
+        clarifications: [],
+        resolved: true,
+        resolution: { value: 'use Postgres', source: 'suggestion', picked_by: 'Coordinator' },
+      }).success,
+    ).toBe(true);
+  });
+
+  it('AwaitAnswerOutput resolution is optional (unresolved snapshot)', () => {
+    expect(
+      AwaitAnswerOutput.safeParse({
+        suggestions: [],
+        comments: [],
+        clarifications: [],
+        resolved: false,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('RecordAnswerOutput accepts ok:false already_resolved branch', () => {
+    expect(() =>
+      RecordAnswerOutput.parse({
+        ok: false,
+        reason: 'already_resolved',
+        resolution: { value: 'use Postgres', source: 'suggestion', picked_by: 'Coordinator' },
+      }),
+    ).not.toThrow();
+  });
+
+  it('RecordAnswerOutput ok:true path unchanged', () => {
+    expect(() => RecordAnswerOutput.parse({ ok: true })).not.toThrow();
+  });
+
+  it('RecordAnswerOutput ok:false requires resolution field', () => {
+    expect(
+      RecordAnswerOutput.safeParse({ ok: false, reason: 'already_resolved' }).success,
+    ).toBe(false);
+  });
+
   it('stop_session output requires transcript_path', () => {
     expect(StopSessionOutput.safeParse({ ok: true, transcript_path: '/x' }).success).toBe(true);
   });

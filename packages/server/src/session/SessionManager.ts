@@ -47,6 +47,12 @@ export interface SessionManagerOpts {
   maxClarificationsPerQuestion?: number;
   /** CHAT-01: max chat messages per session (total). Default 1000. */
   maxChatMessages?: number;
+  /** Phase 11 (ROOM-02): idle window before room_idle_nudge fires. Default 120 000 ms. */
+  idleNudgeWindowMs?: number;
+  /** Phase 11 (ROOM-02): injectable setTimeout for testability. Mirrors ws.ts setIntervalFn. */
+  setTimeoutFn?: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>;
+  /** Phase 11 (ROOM-02): injectable clearTimeout for testability. Mirrors ws.ts clearIntervalFn. */
+  clearTimeoutFn?: (id: ReturnType<typeof setTimeout>) => void;
 }
 
 /**
@@ -95,6 +101,24 @@ interface ActiveSession {
    * and coordinator disconnect clears it so the caption can never stick.
    */
   pickingTicketId: string | null;
+  // Phase 11 (ROOM-02): per-question idle timer handles (Map so batch questions each get own timer)
+  idleTimers: Map<QuestionId, ReturnType<typeof setTimeout>>;
+  /**
+   * Phase 11 (ROOM-03) / CR-01: ref-count of open WS connections per
+   * NON-COORDINATOR participant, tracked INDEPENDENT of approval status (a
+   * participant connects while still pending, then gets approved — see CR-01).
+   * Multi-tab safe (ref-count, never negative). The "is the room empty?"
+   * decision is derived from this map filtered by each participant's CURRENT
+   * roster status at evaluation time, NOT by their status at connect time.
+   */
+  connectedParticipants: Map<string, number>;
+  /**
+   * Phase 11 (ROOM-03) / CR-01: last emitted empty-room state. Lets
+   * `room_empty_changed` stay level-triggered (emit only on a real 0↔non-0
+   * transition) while always recomputing from current state, so it can never
+   * drift. `null` = no empty-room signal has been emitted yet.
+   */
+  lastRoomEmpty: boolean | null;
   /** CHATAI-01 / CHAT-01: durable session-level chat. */
   chat: ChatEntry[];
 }
@@ -144,6 +168,9 @@ export class SessionManager {
       open_questions: new Map<QuestionId, Question>(),
       ticket_to_question: new Map(),
       pickingTicketId: null,
+      idleTimers: new Map<QuestionId, ReturnType<typeof setTimeout>>(),
+      connectedParticipants: new Map<string, number>(),
+      lastRoomEmpty: null,
       chat: [],
     };
     return { session_id };
@@ -179,13 +206,21 @@ export class SessionManager {
     };
     a.participants.set(p.id, p);
     this.emit({ type: 'participant_joined', payload: { participant: p } });
+    // Phase 11 (ROOM-02): a new join resets ALL open question timers (session-level activity)
+    for (const qid of a.open_questions.keys()) {
+      this.armIdleTimer(qid);
+    }
     return p;
   }
 
   removeParticipant(id: ParticipantId): void {
     const a = this.requireActive();
     if (a.participants.delete(id)) {
+      // CR-01: a removed participant can no longer be approved-connected. Drop
+      // any stale presence ref-count and re-evaluate emptiness.
+      a.connectedParticipants.delete(id);
       this.emit({ type: 'participant_left', payload: { participant_id: id } });
+      this.reevaluateRoomEmpty();
     }
   }
 
@@ -223,6 +258,12 @@ export class SessionManager {
     a.ticket_to_question.set(ticket.id, q.id);
     this.emit({ type: 'question_broadcast', payload: { question: q } });
     this.setSessionStatus(this.deriveSessionStatus()); // Phase 6: replaced hardcoded 'question_open'
+    this.armIdleTimer(q.id as QuestionId); // Phase 11 (ROOM-02): arm per-question idle timer
+    // WR-02: a question broadcast into an already-empty room must still surface
+    // the empty-room notice. The web reducer clears roomEmpty on resolve/cancel,
+    // so each fresh question needs a fresh signal — reevaluate emits
+    // room_empty_changed{is_empty:true} when no approved participant is connected.
+    this.reevaluateRoomEmpty();
     return { ticket_id: ticket.id };
   }
 
@@ -310,6 +351,7 @@ export class SessionManager {
     q.suggestions.push(sug);
     this.emit({ type: 'suggestion_added', payload: { question_id: q.id, suggestion: sug } });
     this.tickets.bump(q.ticket_id);
+    this.armIdleTimer(args.question_id); // Phase 11 (ROOM-02): reset per-question idle timer
   }
 
   /**
@@ -394,6 +436,7 @@ export class SessionManager {
     q.comments.push(c);
     this.emit({ type: 'comment_added', payload: { question_id: q.id, comment: c } });
     this.tickets.bump(q.ticket_id);
+    this.armIdleTimer(args.question_id); // Phase 11 (ROOM-02): reset per-question idle timer
   }
 
   /**
@@ -513,6 +556,9 @@ export class SessionManager {
     question_id: QuestionId;
     value: string;
     source: AnswerSource;
+    /** Phase 9 (SYNC-01): identifies who chose the answer. Callers set 'Initiator'
+     *  (MCP tool wrapper) or 'Coordinator' (HTTP route). Optional for backwards-compat. */
+    picked_by?: string;
   }): void {
     const a = this.requireActive();
     const q = a.open_questions.get(args.question_id); // Phase 6: replaced current_question scalar guard
@@ -523,15 +569,32 @@ export class SessionManager {
       throw new Error(`record_answer: question is not broadcast (status=${q.status})`);
     }
     const recorded_at = this.opts.clock.isoNow();
+    // CR-01/WR-01: build the resolution once with a conditional spread so
+    // `picked_by` is OMITTED (not present-but-undefined) when the caller did
+    // not attribute the pick. This satisfies exactOptionalPropertyTypes for
+    // `q.resolution` and keeps the on-the-wire `question_resolved` shape
+    // consistent with snapshot()/getTerminalResolution(). Reusing the same
+    // non-null local for the emit also avoids the TS18047 "possibly null"
+    // reads that a union-typed field assignment does not narrow.
+    const resolution = {
+      value: args.value,
+      source: args.source,
+      recorded_at,
+      ...(args.picked_by !== undefined ? { picked_by: args.picked_by } : {}),
+    };
     q.status = 'resolved';
-    q.resolution = { value: args.value, source: args.source, recorded_at };
+    q.resolution = resolution;
     a.decisions.push({ question: q.text, answer: args.value, question_id: q.id });
     this.tickets.resolve(q.ticket_id, args.value);
     this.terminalQuestions.push(q);
     this.emit({
       type: 'question_resolved',
-      payload: { question_id: q.id, resolution: q.resolution },
+      payload: {
+        question_id: q.id,
+        resolution,
+      },
     });
+    this.clearIdleTimer(args.question_id); // Phase 11 (ROOM-02): clear timer BEFORE deleting from open_questions
     a.open_questions.delete(args.question_id); // Phase 6: replaced a.current_question = null
     // WR-01: prune ticket_to_question so stale entries cannot accumulate for the
     // session lifetime. answerClarification falls back to terminalQuestions (by
@@ -544,6 +607,10 @@ export class SessionManager {
       a.pickingTicketId = null;
     }
     this.setSessionStatus(this.deriveSessionStatus()); // derives fresh status from pickingTicketId
+    // WR-02: clears lastRoomEmpty when no question remains open, so the NEXT
+    // question broadcast into an empty room re-emits a fresh empty signal
+    // (mirrors the web reducer clearing roomEmpty on question_resolved).
+    this.reevaluateRoomEmpty();
   }
 
   /**
@@ -554,6 +621,7 @@ export class SessionManager {
   cancelAllOpenQuestions(reason: string): void {
     const a = this.requireActive();
     for (const q of a.open_questions.values()) {
+      this.clearIdleTimer(q.id as QuestionId); // Phase 11 (ROOM-02): clear before status mutation
       q.status = 'cancelled';
       this.tickets.cancel(q.ticket_id);
       this.terminalQuestions.push(q);
@@ -566,6 +634,7 @@ export class SessionManager {
     a.ticket_to_question.clear();
     a.pickingTicketId = null; // WR-01/WR-03: all questions gone → no pick can be active
     this.setSessionStatus(this.deriveSessionStatus()); // pickingTicketId nulled above → choosing cleared
+    this.reevaluateRoomEmpty(); // WR-02: reset empty edge tracker (no question open)
   }
 
   /**
@@ -579,6 +648,7 @@ export class SessionManager {
   timeoutCurrentQuestion(): void {
     const a = this.requireActive();
     for (const q of a.open_questions.values()) {
+      this.clearIdleTimer(q.id as QuestionId); // Phase 11 (ROOM-02): clear before status mutation
       q.status = 'timeout';
       this.tickets.timeout(q.ticket_id);
       this.terminalQuestions.push(q);
@@ -592,6 +662,7 @@ export class SessionManager {
     a.ticket_to_question.clear();
     a.pickingTicketId = null; // WR-01/WR-03: all questions gone → no pick can be active
     this.setSessionStatus(this.deriveSessionStatus()); // pickingTicketId nulled above → choosing cleared
+    this.reevaluateRoomEmpty(); // WR-02: reset empty edge tracker (no question open)
   }
 
   /**
@@ -660,6 +731,18 @@ export class SessionManager {
         ...(cl.answered_at !== undefined ? { answered_at: cl.answered_at } : {}),
       })),
       resolved,
+      // Phase 9 (SYNC-01): populate resolution when the question is resolved and
+      // has a stored resolution object. Optional for backwards-compat — absent
+      // when resolved:false. Falls back to 'Initiator' for pre-Phase-9 events.
+      ...(resolved && q.resolution
+        ? {
+            resolution: {
+              value: q.resolution.value,
+              source: q.resolution.source,
+              picked_by: q.resolution.picked_by ?? 'Initiator',
+            },
+          }
+        : {}),
     };
   }
 
@@ -680,6 +763,26 @@ export class SessionManager {
     return this.terminalQuestions.some((q) => q.ticket_id === ticketId);
   }
 
+  /**
+   * Phase 9 (SYNC-01/SYNC-02): Read-only accessor for the resolution of a
+   * terminal (resolved) question identified by its ticket_id. Returns null for
+   * unknown ticket IDs. The `picked_by` field falls back to 'Initiator' for
+   * pre-Phase-9 questions that lack attribution (backwards-compat for replayed
+   * RingBuffer events). Throws if no session is active.
+   */
+  getTerminalResolution(
+    ticketId: string,
+  ): { value: string; source: AnswerSource; picked_by: string } | null {
+    this.requireActive();
+    const q = this.terminalQuestions.find((tq) => tq.ticket_id === ticketId);
+    if (!q || !q.resolution) return null;
+    return {
+      value: q.resolution.value,
+      source: q.resolution.source,
+      picked_by: q.resolution.picked_by ?? 'Initiator',
+    };
+  }
+
   approveParticipant(id: ParticipantId): void {
     const a = this.requireActive();
     const p = a.participants.get(id);
@@ -690,6 +793,9 @@ export class SessionManager {
       type: 'participant_status_changed',
       payload: { participant_id: id, status: 'approved' },
     });
+    // CR-01: approving a participant who is already connected flips the room
+    // from empty→non-empty (the core flow the old connect-time gate missed).
+    this.reevaluateRoomEmpty();
   }
 
   kickParticipant(id: ParticipantId): void {
@@ -702,6 +808,11 @@ export class SessionManager {
       type: 'participant_status_changed',
       payload: { participant_id: id, status: 'kicked' },
     });
+    // WR-01: kicking an approved+connected participant drops them from the
+    // approved-connected count immediately. kickParticipant does NOT close the
+    // socket, so the WS close handler never fires here — re-evaluating from the
+    // (now 'kicked') roster status is what prevents the old ref-count leak.
+    this.reevaluateRoomEmpty();
   }
 
   setLocked(locked: boolean): void {
@@ -854,12 +965,144 @@ export class SessionManager {
       chat: a.chat, // CHAT-01: durable session-level chat list
     };
     const path = writeTranscript(transcript, this.opts.transcriptDir);
+    // Phase 11 (ROOM-02): clear all remaining idle timer handles BEFORE this.active = null
+    // to avoid Pitfall 1 (null-dereference in clearIdleTimer). cancelAllOpenQuestions() already
+    // ran above (line 870) but stop() may be called without open questions, so iterate directly.
+    for (const handle of a.idleTimers.values()) {
+      (this.opts.clearTimeoutFn ?? clearTimeout)(handle);
+    }
+    a.idleTimers.clear();
     this.active = null;
     this.events = new RingBuffer<ServerEvent>(500);
     this.nextSeq = 0;
     this.terminalQuestions = [];
     this.tickets = new TicketStore(this.opts.clock);
     return { ok: true, transcript_path: path };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 11 (ROOM-02): idle timer helpers
+  // ---------------------------------------------------------------------------
+
+  /** Arms (or re-arms) the per-question idle timer. Clears any existing handle first
+   * so at most one active timer exists per question. */
+  private armIdleTimer(questionId: QuestionId): void {
+    const a = this.requireActive();
+    const existing = a.idleTimers.get(questionId);
+    if (existing !== undefined) {
+      (this.opts.clearTimeoutFn ?? clearTimeout)(existing);
+    }
+    const window = this.opts.idleNudgeWindowMs ?? 120_000;
+    const handle = (this.opts.setTimeoutFn ?? setTimeout)(() => {
+      if (!this.active) return; // Pitfall 1: guard against teardown
+      const still = this.active.open_questions.get(questionId);
+      if (still?.status === 'broadcast') {
+        this.emit({ type: 'room_idle_nudge', payload: { question_id: questionId } });
+      }
+      this.active.idleTimers.delete(questionId);
+    }, window);
+    a.idleTimers.set(questionId, handle);
+  }
+
+  /** Clears the per-question idle timer if one is pending. Safe to call with no active session. */
+  private clearIdleTimer(questionId: QuestionId): void {
+    const a = this.active;
+    if (!a) return;
+    const handle = a.idleTimers.get(questionId);
+    if (handle !== undefined) {
+      (this.opts.clearTimeoutFn ?? clearTimeout)(handle);
+      a.idleTimers.delete(questionId);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase 11 (ROOM-03) / CR-01: participant presence tracking
+  //
+  // Design (CR-01 redesign): the WS layer reports EVERY non-coordinator
+  // connect/disconnect via notifyParticipantConnected/Disconnected, regardless
+  // of approval status at connect time. The "is the room empty?" decision is
+  // then DERIVED from the set of currently-connected participants whose CURRENT
+  // roster status is 'approved' — recomputed on every event that could change
+  // it (connect, disconnect/eviction, approval, kick, and question-open).
+  //
+  // This fixes the dominant flow (connect-while-pending → approve → engage):
+  // approval flips the room from empty→non-empty even though no reconnect
+  // happens on the client. The recompute-from-current-state model is also
+  // level-triggered (emit only on a real 0↔non-0 transition) yet drift-proof,
+  // and it naturally fixes the kick leak (WR-01) because a kicked participant's
+  // status is no longer 'approved' so they stop counting.
+  // ---------------------------------------------------------------------------
+
+  /** Called by WsRouter when ANY non-coordinator participant opens a WS connection.
+   * Ref-counts so multi-tab users are tracked correctly. NOT gated on approval —
+   * a pending connection counts as connected-but-not-approved (so it does not make
+   * the room non-empty until the participant is approved). Guards against no active
+   * session — safe to call during teardown. */
+  notifyParticipantConnected(participantId: string): void {
+    const a = this.active;
+    if (!a) return; // guard against teardown
+    const prev = a.connectedParticipants.get(participantId) ?? 0;
+    a.connectedParticipants.set(participantId, prev + 1);
+    this.reevaluateRoomEmpty();
+  }
+
+  /** Called by WsRouter when ANY non-coordinator participant closes their WS
+   * connection (or is evicted by the heartbeat). Ref-count decrements, never
+   * negative. No-op for participants that were never connected (prev === 0). */
+  notifyParticipantDisconnected(participantId: string): void {
+    const a = this.active;
+    if (!a) return; // guard against teardown
+    const prev = a.connectedParticipants.get(participantId) ?? 0;
+    if (prev === 0) return; // never connected — pure no-op
+    const next = prev - 1;
+    if (next === 0) a.connectedParticipants.delete(participantId);
+    else a.connectedParticipants.set(participantId, next);
+    this.reevaluateRoomEmpty();
+  }
+
+  /**
+   * CR-01: count of currently-connected participants whose CURRENT roster
+   * status is 'approved'. Reads the live roster (not the status captured at
+   * connect time), so a participant approved after connecting is counted, and a
+   * kicked participant is dropped — without needing the WS layer to re-notify.
+   */
+  private approvedConnectedCount(): number {
+    const a = this.requireActive();
+    let count = 0;
+    for (const [pid, refs] of a.connectedParticipants) {
+      if (refs <= 0) continue;
+      if (a.participants.get(pid as ParticipantId)?.status === 'approved') count += 1;
+    }
+    return count;
+  }
+
+  /**
+   * CR-01: level-triggered empty-room evaluation. Computes "is the room empty?"
+   * from current state (no open broadcast question OR zero approved-connected
+   * participants), and emits `room_empty_changed` only on an actual transition.
+   * Called on every event that can change emptiness: WS connect, WS disconnect/
+   * eviction, approveParticipant, kickParticipant, and question-open.
+   *
+   * Only meaningful while a question is open — when no question is broadcast we
+   * never emit (and reset lastRoomEmpty to null so the next open question gets a
+   * fresh signal). This satisfies the locked decision "no event when no question
+   * is open" while still letting WR-02 fire on question-open into an empty room.
+   */
+  private reevaluateRoomEmpty(): void {
+    const a = this.active;
+    if (!a) return; // guard against teardown
+    const questionOpen = [...a.open_questions.values()].some((q) => q.status === 'broadcast');
+    if (!questionOpen) {
+      // No open question → the empty-room notice is not applicable. Reset the
+      // edge tracker so a freshly-broadcast question re-emits from a clean slate
+      // (the web reducer also clears roomEmpty on resolve/cancel).
+      a.lastRoomEmpty = null;
+      return;
+    }
+    const isEmpty = this.approvedConnectedCount() === 0;
+    if (a.lastRoomEmpty === isEmpty) return; // level-triggered: no transition
+    a.lastRoomEmpty = isEmpty;
+    this.emit({ type: 'room_empty_changed', payload: { is_empty: isEmpty } });
   }
 
   private emit(e: Omit<ServerEvent, 'seq' | 'ts'>): void {

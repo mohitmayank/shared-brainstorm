@@ -34,6 +34,12 @@ export interface WsRouter {
   connect(args: WsConnectArgs): Promise<AcceptedConn | RejectedConn>;
   broadcast(event: ServerEvent | EphemeralFrame): void;
   closeAll(reason: string): void;
+  /**
+   * Phase 14 (SHARE-01): Set the participant join URL after transport resolves.
+   * Mirrors setSecureCookie boot-order pattern from index.ts.
+   * New connections after this call will receive public_url in their welcome frame.
+   */
+  setPublicUrl(url: string): void;
 }
 
 interface Subscriber {
@@ -73,6 +79,9 @@ export function createWsRouter({
   clearIntervalFn?: (id: ReturnType<typeof setInterval>) => void;
 }): WsRouter {
   const subs = new Set<Subscriber>();
+  // Phase 14 (SHARE-01): mutable ref updated via setPublicUrl() after transport resolves.
+  // Included in welcome frame payload for reconnecting clients. Undefined until set.
+  let currentPublicUrl: string | undefined;
 
   // WR-02: best-effort liveness/identity check for the active session id so the
   // heartbeat can revoke coordinator subscribers whose session is gone. Returns
@@ -108,6 +117,12 @@ export function createWsRouter({
       if (now - s.lastSeen > livenessMs) {
         s.close('stale');
         subs.delete(s);
+        // Phase 11 (ROOM-03) / CR-01: stale eviction counts as a disconnect for
+        // ALL non-coordinator participants (presence is tracked independent of
+        // approval status; the SM derives approved-connected from live roster).
+        if (!s.isCoordinator) {
+          try { manager.notifyParticipantDisconnected(s.participantId); } catch { /* session may be gone */ }
+        }
       }
     }
   }, heartbeatMs);
@@ -153,12 +168,21 @@ export function createWsRouter({
         sessionId: v.session_id,
       };
       subs.add(sub);
+      // Phase 11 (ROOM-03) / CR-01: notify SM of EVERY non-coordinator
+      // connection regardless of approval status at connect time. The dominant
+      // flow is connect-while-pending → get approved → engage; gating on
+      // approved-at-connect (the old behavior) missed it entirely. The SM tracks
+      // raw presence and derives approved-connected from the live roster, so
+      // approval-after-connect correctly flips the room non-empty.
+      if (!isCoordinator) {
+        manager.notifyParticipantConnected(sub.participantId);
+      }
 
       send(
         JSON.stringify(
           me
-            ? { type: 'welcome', payload: { session: v, you: me, is_coordinator: false } }
-            : { type: 'welcome', payload: { session: v, is_coordinator: true } },
+            ? { type: 'welcome', payload: { session: v, you: me, is_coordinator: false, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}) } }
+            : { type: 'welcome', payload: { session: v, is_coordinator: true, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}) } },
         ),
       );
 
@@ -300,6 +324,15 @@ export function createWsRouter({
         handle,
         close: () => {
           subs.delete(sub);
+          // Phase 11 (ROOM-03) / CR-01 / WR-01: notify SM of EVERY non-coordinator
+          // disconnect, unconditionally — do NOT re-read current status. Reading
+          // status at close time was the WR-01 leak: a participant approved (ref
+          // counted) then kicked reads 'kicked' here, so the old code skipped the
+          // decrement and leaked the ref-count forever. notifyParticipantDisconnected
+          // is a safe no-op for any participant that was never counted (prev === 0).
+          if (!isCoordinator) {
+            try { manager.notifyParticipantDisconnected(sub.participantId); } catch { /* session may be gone */ }
+          }
           // WR-03: coordinator disconnect clears any in-progress pick so the
           // 'choosing' caption never sticks on participant screens after the tab
           // closes or the network drops mid-pick.
@@ -325,6 +358,10 @@ export function createWsRouter({
       clearIntervalFn(beat);
       for (const s of subs) s.close(reason);
       subs.clear();
+    },
+
+    setPublicUrl(url: string): void {
+      currentPublicUrl = url;
     },
   };
 

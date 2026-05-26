@@ -64,7 +64,13 @@ export interface Question {
   suggestions: Suggestion[];
   comments: Comment[];
   clarifications: Clarification[];
-  resolution: { value: string; source: AnswerSource; recorded_at: string } | null;
+  resolution: {
+    value: string;
+    source: AnswerSource;
+    recorded_at: string;
+    // Phase 9 (SYNC-01): server-derived ('Coordinator' | 'Initiator'); absent for pre-Phase-9 events.
+    picked_by?: string;
+  } | null;
 }
 
 export type SessionStatus = 'waiting' | 'question_open' | 'choosing' | 'done';

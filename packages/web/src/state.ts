@@ -78,6 +78,25 @@ export interface UiState {
    */
   sessionStatus: 'waiting' | 'question_open' | 'choosing' | 'done';
   /**
+   * Phase 11 (ROOM-02): set when server emits `room_idle_nudge`. Mirrors the
+   * `tunnelBanner` pattern: carries question_id for dismiss-ack in Coordinator.tsx
+   * component state (keyed by question_id so re-arm on new question is automatic).
+   * Cleared on question_resolved / question_cancelled.
+   */
+  idleNudge: { question_id: string } | null;
+  /**
+   * Phase 11 (ROOM-03): set from room_empty_changed.is_empty. Cleared when
+   * is_empty: false arrives (participant reconnects) or question resolves.
+   */
+  roomEmpty: boolean;
+  /**
+   * Phase 14 (SHARE-01/02): participant join URL received from the server's
+   * welcome payload. Null until a welcome frame with public_url arrives (e.g.
+   * older server that omits the field). Never set to coordinator_url — the
+   * server only writes the public transport URL here.
+   */
+  publicUrl: string | null;
+  /**
    * Transient per-actor presence map. Keys are participant_id or '__coordinator'.
    * Entries are populated by ephemeral presence frames and expired by App.tsx timers.
    * Never persisted; never replayed on reconnect.
@@ -96,6 +115,9 @@ export const initialState: UiState = {
   myStatus: null,
   roomLocked: false,
   sessionStatus: 'waiting',
+  idleNudge: null,
+  roomEmpty: false,
+  publicUrl: null,
   presence: {},
 };
 
@@ -187,6 +209,16 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       // append-style events like `question_resolved`).
       lastSeq: Math.max(state.lastSeq, seq),
       banner: null,
+      // WR-04: welcome re-primes authoritative state, so reset the advisory
+      // empty-room / idle-nudge flags. Any still-true state re-asserts via the
+      // ring-buffer-replayed room_* events that follow welcome; if the relevant
+      // event aged out of the buffer, this prevents a stale advisory from
+      // persisting forever (matches the sessionStatus/roomLocked re-prime contract).
+      idleNudge: null,
+      roomEmpty: false,
+      // Phase 14 (SHARE-01/02): project public_url into publicUrl when present;
+      // leave unchanged (null) when absent (back-compat with older server builds).
+      ...(p.public_url !== undefined ? { publicUrl: p.public_url } : {}),
     };
   }
 
@@ -347,6 +379,7 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       value: string;
       source: 'suggestion' | 'synthesis' | 'override';
       recorded_at: string;
+      picked_by?: string; // D-01: additive, absent for pre-Phase-9 events
     };
     const p = payload<{ question_id: string; resolution: Resolution }>(evt);
     // Look up the resolved question in questions[] by question_id (Pitfall 6: don't use current_question)
@@ -370,6 +403,8 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     return {
       ...state,
       lastSeq: seq,
+      idleNudge: null, // Phase 11: clear nudge when any question resolves
+      roomEmpty: false, // Phase 11: clear empty-room when question resolves
       session: {
         ...state.session,
         questions: updatedQuestions,
@@ -390,6 +425,8 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     return {
       ...state,
       lastSeq: seq,
+      idleNudge: null, // Phase 11: clear nudge when question cancelled
+      roomEmpty: false, // Phase 11: clear empty-room when question cancelled
       session: {
         ...state.session,
         questions: filteredQuestions,
@@ -407,6 +444,11 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       ...state,
       lastSeq: seq,
       tunnelBanner: { url: p.public_url },
+      // Phase 14 (SHARE-01/02): keep publicUrl current after a mid-session tunnel URL
+      // change so the ShareLinkButton stays accurate without waiting for a reconnect.
+      // Direct assignment is safe here — public_url is z.string() (required) in the
+      // tunnel_url_changed schema, never undefined.
+      publicUrl: p.public_url,
     };
   }
 
@@ -466,6 +508,18 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     return { ...state, lastSeq: seq, sessionStatus: p.status };
   }
 
+  // Phase 11 (ROOM-02): idle nudge — set with question_id for dismiss-ack
+  if (type === 'room_idle_nudge') {
+    const p = payload<{ question_id: string }>(evt);
+    return { ...state, lastSeq: seq, idleNudge: { question_id: p.question_id } };
+  }
+
+  // Phase 11 (ROOM-03): empty-room changed
+  if (type === 'room_empty_changed') {
+    const p = payload<{ is_empty: boolean }>(evt);
+    return { ...state, lastSeq: seq, roomEmpty: p.is_empty };
+  }
+
   return { ...state, lastSeq: seq };
 }
 
@@ -487,6 +541,14 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
       // session_status_changed events (which may have aged out of the ring buffer).
       sessionStatus: evt.payload.session.session_status,
       banner: null,
+      // WR-04: reset advisory empty-room / idle-nudge flags on welcome re-prime
+      // (same rationale as the durable welcome branch); replayed room_* events
+      // re-assert any still-true state.
+      idleNudge: null,
+      roomEmpty: false,
+      // Phase 14 (SHARE-01/02): project public_url into publicUrl when present;
+      // leave unchanged (null) when absent (back-compat with older server builds).
+      ...(evt.payload.public_url !== undefined ? { publicUrl: evt.payload.public_url } : {}),
       // NOTE: do NOT update lastSeq — ephemeral welcome has no seq
     };
   }

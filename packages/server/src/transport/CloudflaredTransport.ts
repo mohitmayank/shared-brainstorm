@@ -215,7 +215,9 @@ export class CloudflaredTransport implements Transport {
             `— cloudflared binary: ${this.command}, args: ${args.join(' ')}, ` +
             `exited: ${exited}, stderr_lines_seen: ${stderrLineCount}, ` +
             `last_stderr_line: ${JSON.stringify(lastStderrLine)} ` +
-            `— try \`--no-cloudflared\` to fall back to LAN mode, or check your network's outbound HTTPS access.`;
+            `— stop and restart the session to retry. Cloudflared failures are usually caused by a ` +
+            `firewall or network blocking outbound HTTPS. If cloudflared is unavailable, ` +
+            `the next session auto-selects LAN mode for same-network teammates.`;
           reject(new Error(diag));
         }
       }, this.readyTimeoutMs);

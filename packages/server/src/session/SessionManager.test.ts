@@ -1829,6 +1829,85 @@ describe('postChat', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 9 (SYNC-01/SYNC-02): Wave 0 stubs — snapshot() resolution field +
+// getTerminalResolution() accessor
+//
+// These tests document expected behaviour once Wave 2 adds:
+//   - picked_by param to recordAnswer()
+//   - getTerminalResolution(ticketId) accessor to SessionManager
+// They are marked describe.skip because the production code does not exist yet;
+// Wave 2 will un-skip them.
+// ---------------------------------------------------------------------------
+
+describe('snapshot() and resolution propagation (Wave 2 implementation)', () => {
+  it('snapshot() includes resolution field with picked_by when question resolved (D-01)', () => {
+    // Wave 0 stub — Wave 2 adds picked_by param to recordAnswer() so the
+    // resolution stored on the question carries attribution.
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'a' });
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const qid = mgr.currentQuestion()!.id;
+      // Wave 2: recordAnswer will accept { question_id, value, source, picked_by }
+      // For now, cast to bypass type-checking in the skip block.
+      (mgr.recordAnswer as unknown as (args: unknown) => void)({
+        question_id: qid,
+        value: 'Answer',
+        source: 'override',
+        picked_by: 'Initiator',
+      });
+      // snapshot() finds the terminal question and returns resolution
+      // Wave 2: awaitAnswer returns resolved=true + resolution.picked_by
+      const snap = mgr.snapshot(qid as QuestionId, true);
+      expect(snap.resolved).toBe(true);
+      expect(snap.resolution).toBeDefined();
+      expect(snap.resolution!.value).toBe('Answer');
+      expect(snap.resolution!.source).toBe('override');
+      expect(snap.resolution!.picked_by).toBe('Initiator');
+      void ticket_id;
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('getTerminalResolution() returns resolution for resolved ticket (D-03 accessor)', () => {
+    // Wave 0 stub — Wave 2 adds getTerminalResolution() to SessionManager.
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'a' });
+      const { ticket_id } = mgr.askGroup({ question: 'q?' });
+      const qid = mgr.currentQuestion()!.id;
+      mgr.recordAnswer({ question_id: qid, value: 'Answer', source: 'suggestion' });
+      // Wave 2: this method will exist and return { value, source, picked_by }
+      const resolution = (mgr as unknown as { getTerminalResolution: (t: string) => unknown }).getTerminalResolution(ticket_id);
+      expect(resolution).not.toBeNull();
+      const res = resolution as { value: string; source: string; picked_by: string };
+      expect(res.value).toBe('Answer');
+      expect(res.source).toBe('suggestion');
+      expect(typeof res.picked_by).toBe('string');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('getTerminalResolution() returns null for unknown ticketId (D-03 null case)', () => {
+    // Wave 0 stub — Wave 2 adds getTerminalResolution() to SessionManager.
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'a' });
+      mgr.askGroup({ question: 'q?' });
+      const qid = mgr.currentQuestion()!.id;
+      mgr.recordAnswer({ question_id: qid, value: 'Answer', source: 'override' });
+      // Wave 2: getTerminalResolution('nonexistent') must return null
+      const resolution = (mgr as unknown as { getTerminalResolution: (t: string) => unknown }).getTerminalResolution('sb_t_nonexistent');
+      expect(resolution).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // WR-01: ticket_to_question pruning on resolve/cancel/timeout
 // ---------------------------------------------------------------------------
 
@@ -1944,6 +2023,422 @@ describe('WR-01: ticket_to_question pruning', () => {
       expect(snap.suggestions[0]!.value).toBe('Postgres');
     } finally {
       cleanup();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 11 (ROOM-02 / ROOM-03): idle timer + empty room detection
+// ---------------------------------------------------------------------------
+
+/**
+ * makeMgrWithTimers creates a manager with injectable fake timer functions.
+ * All timers are stored in a Map and can be synchronously fired via fireTimer().
+ * No vi.useFakeTimers — no real-time waits needed.
+ */
+const makeMgrWithTimers = (idleNudgeWindowMs = 120_000) => {
+  const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
+  const events: ServerEvent[] = [];
+  const clock = fixedClock('2026-04-29T12:00:00Z');
+  // Fake timer storage: callbacks keyed by handle id
+  let nextHandle = 1;
+  const pending = new Map<number, { cb: () => void; ms: number }>();
+  const setTimeoutFn = (cb: () => void, ms: number): ReturnType<typeof setTimeout> => {
+    const id = nextHandle++ as unknown as ReturnType<typeof setTimeout>;
+    pending.set(id as unknown as number, { cb, ms });
+    return id;
+  };
+  const clearTimeoutFn = (id: ReturnType<typeof setTimeout>): void => {
+    pending.delete(id as unknown as number);
+  };
+  const fireTimer = (id: ReturnType<typeof setTimeout>): void => {
+    const entry = pending.get(id as unknown as number);
+    if (entry) { pending.delete(id as unknown as number); entry.cb(); }
+  };
+  const mgr = new SessionManager({
+    clock,
+    broadcast: (e) => { if ('seq' in e) events.push(e as ServerEvent); },
+    transcriptDir: dir,
+    idleNudgeWindowMs,
+    setTimeoutFn,
+    clearTimeoutFn,
+  });
+  return {
+    mgr, events, clock, dir, pending, fireTimer,
+    cleanup: () => rmSync(dir, { recursive: true, force: true }),
+  };
+};
+
+// Helper: start session + add approved participant + askGroup
+const setupSessionWithQuestion = (mgr: SessionManager) => {
+  mgr.start({ brief: 'idle-test' });
+  const p = mgr.addParticipant({ display_name: 'Alice' });
+  mgr.approveParticipant(p.id);
+  const { ticket_id } = mgr.askGroup({ question: 'Which DB?' });
+  const q = mgr.currentQuestion()!;
+  return { p, ticket_id, q };
+};
+
+describe('idle timer (ROOM-02)', () => {
+  it('fires room_idle_nudge after idleNudgeWindowMs with no activity', () => {
+    const { mgr, events, pending, fireTimer, cleanup } = makeMgrWithTimers(5000);
+    try {
+      setupSessionWithQuestion(mgr);
+      expect(pending.size).toBe(1);
+      const [timerId] = [...pending.keys()] as [number];
+      fireTimer(timerId as unknown as ReturnType<typeof setTimeout>);
+      const nudge = events.find((e) => e.type === 'room_idle_nudge');
+      expect(nudge).toBeDefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('carries correct question_id in room_idle_nudge payload', () => {
+    const { mgr, events, pending, fireTimer, cleanup } = makeMgrWithTimers(5000);
+    try {
+      const { q } = setupSessionWithQuestion(mgr);
+      const [timerId] = [...pending.keys()] as [number];
+      fireTimer(timerId as unknown as ReturnType<typeof setTimeout>);
+      const nudge = events.find((e) => e.type === 'room_idle_nudge');
+      expect(nudge).toBeDefined();
+      if (nudge && nudge.type === 'room_idle_nudge') {
+        const ev = nudge as { type: string; payload: { question_id: string } };
+        expect(ev.payload.question_id).toBe(q.id);
+      }
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('resets timer on addParticipant — old timer no longer fires nudge', () => {
+    const { mgr, events, pending, fireTimer, cleanup } = makeMgrWithTimers(5000);
+    try {
+      setupSessionWithQuestion(mgr);
+      expect(pending.size).toBe(1);
+      const [oldId] = [...pending.keys()] as [number];
+      // Add a new participant — resets timer for all open questions
+      const p2 = mgr.addParticipant({ display_name: 'Bob' });
+      mgr.approveParticipant(p2.id);
+      // Old timer handle should be cleared; a new one created
+      expect(pending.has(oldId)).toBe(false);
+      expect(pending.size).toBe(1);
+      // Fire the old (now removed) timer — should not emit nudge
+      fireTimer(oldId as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeUndefined();
+      // Fire the new timer — should emit nudge
+      const [newId] = [...pending.keys()] as [number];
+      fireTimer(newId as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeDefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('resets timer on postSuggestion — old timer no longer fires nudge', () => {
+    const { mgr, events, pending, fireTimer, cleanup } = makeMgrWithTimers(5000);
+    try {
+      const { p, q } = setupSessionWithQuestion(mgr);
+      const [oldId] = [...pending.keys()] as [number];
+      mgr.postSuggestion({ participant_id: p.id, question_id: q.id, value: 'PostgreSQL' });
+      // Old timer cleared; new one armed
+      expect(pending.has(oldId)).toBe(false);
+      expect(pending.size).toBe(1);
+      // Fire old — no nudge
+      fireTimer(oldId as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeUndefined();
+      // Fire new — nudge
+      const [newId] = [...pending.keys()] as [number];
+      fireTimer(newId as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeDefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('resets timer on postComment — old timer no longer fires nudge', () => {
+    const { mgr, events, pending, fireTimer, cleanup } = makeMgrWithTimers(5000);
+    try {
+      const { p, q } = setupSessionWithQuestion(mgr);
+      const [oldId] = [...pending.keys()] as [number];
+      mgr.postComment({ participant_id: p.id, question_id: q.id, text: 'good point' });
+      expect(pending.has(oldId)).toBe(false);
+      expect(pending.size).toBe(1);
+      // Old timer fired — no nudge
+      fireTimer(oldId as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeUndefined();
+      // New timer fires — nudge
+      const [newId] = [...pending.keys()] as [number];
+      fireTimer(newId as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeDefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('cleared on recordAnswer — firing stale timer id produces no nudge', () => {
+    const { mgr, events, pending, fireTimer, cleanup } = makeMgrWithTimers(5000);
+    try {
+      const { q } = setupSessionWithQuestion(mgr);
+      const [timerId] = [...pending.keys()] as [number];
+      // Record answer — should clear the timer
+      mgr.recordAnswer({ question_id: q.id, value: 'Postgres', source: 'override' });
+      expect(pending.has(timerId)).toBe(false);
+      // Fire the (already removed) timer id — should not emit nudge
+      // (the callback guard `still?.status === 'broadcast'` also handles this)
+      fireTimer(timerId as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('cleared on stop() — no nudge after session ends', () => {
+    const { mgr, events, pending, fireTimer, cleanup } = makeMgrWithTimers(5000);
+    try {
+      setupSessionWithQuestion(mgr);
+      const [timerId] = [...pending.keys()] as [number];
+      mgr.stop('stop_session');
+      // After stop, timer should be removed from pending
+      expect(pending.has(timerId)).toBe(false);
+      // Firing the stale id should be a no-op
+      fireTimer(timerId as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('at most one active timer per question — re-arm replaces old handle', () => {
+    const { mgr, events, pending, fireTimer, cleanup } = makeMgrWithTimers(5000);
+    try {
+      const { p, q } = setupSessionWithQuestion(mgr);
+      // Arm multiple times (each armIdleTimer call replaces the previous handle)
+      const [id1] = [...pending.keys()] as [number];
+      mgr.postSuggestion({ participant_id: p.id, question_id: q.id, value: 'A' });
+      const [id2] = [...pending.keys()] as [number];
+      expect(id1).not.toBe(id2);
+      expect(pending.size).toBe(1); // only one timer at a time
+      // Firing old id1 (cleared) should not emit nudge
+      fireTimer(id1 as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeUndefined();
+      // Only the latest timer fires
+      fireTimer(id2 as unknown as ReturnType<typeof setTimeout>);
+      expect(events.find((e) => e.type === 'room_idle_nudge')).toBeDefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('default idleNudgeWindowMs is 120000 when opt is absent — no error on create', () => {
+    // Tests that SessionManager with no idleNudgeWindowMs opt does not throw
+    // and the default (120_000) is used when the timer fires.
+    const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
+    let capturedMs: number | undefined;
+    try {
+      const mgr = new SessionManager({
+        clock: fixedClock('2026-04-29T12:00:00Z'),
+        transcriptDir: dir,
+        setTimeoutFn: (_cb, ms) => {
+          capturedMs = ms;
+          return 0 as unknown as ReturnType<typeof setTimeout>;
+        },
+        clearTimeoutFn: () => {},
+      });
+      mgr.start({ brief: 'default-window' });
+      mgr.askGroup({ question: 'q?' });
+      expect(capturedMs).toBe(120_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('batch questions each get their own idle timer — armIdleTimer is called per question in askGroupBatch', () => {
+    const { mgr, pending, cleanup } = makeMgrWithTimers(5000);
+    try {
+      mgr.start({ brief: 'batch-idle' });
+      mgr.askGroupBatch([{ question: 'Q1?' }, { question: 'Q2?' }]);
+      // Two separate questions → two separate timers
+      expect(pending.size).toBe(2);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+// Helper: collect the is_empty values of every room_empty_changed event, in order.
+const emptyTransitions = (events: ServerEvent[]): boolean[] =>
+  events
+    .filter((e) => e.type === 'room_empty_changed')
+    .map((e) => (e as unknown as { payload: { is_empty: boolean } }).payload.is_empty);
+
+const lastEmpty = (events: ServerEvent[]): boolean | undefined => {
+  const t = emptyTransitions(events);
+  return t.length > 0 ? t[t.length - 1] : undefined;
+};
+
+describe('empty room detection (ROOM-03 / CR-01)', () => {
+  it('CR-01: connect-PENDING does not make the room non-empty; approve-after-connect flips it non-empty; disconnect makes it empty', () => {
+    // The dominant real flow the old connect-time gate missed entirely.
+    const { mgr, events, cleanup } = makeMgrWithTimers();
+    try {
+      mgr.start({ brief: 'cr-01-flow' });
+      const p = mgr.addParticipant({ display_name: 'Alice' }); // pending
+      mgr.askGroup({ question: 'Which DB?' });
+      // Question opened into an empty room (no one connected/approved yet) → is_empty:true (WR-02).
+      expect(lastEmpty(events)).toBe(true);
+
+      // (a) participant connects while PENDING → still empty (pending does not count).
+      mgr.notifyParticipantConnected(p.id);
+      expect(lastEmpty(events)).toBe(true);
+
+      // (b) approve while connected → flips non-empty (CR-01 core fix).
+      mgr.approveParticipant(p.id);
+      expect(lastEmpty(events)).toBe(false);
+
+      // (c) that approved+connected participant disconnects mid-question → empty.
+      mgr.notifyParticipantDisconnected(p.id);
+      expect(lastEmpty(events)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('WR-01: kicking an approved+connected participant drops them from the approved-connected count (no ref-count leak)', () => {
+    const { mgr, events, cleanup } = makeMgrWithTimers();
+    try {
+      mgr.start({ brief: 'wr-01-kick' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      mgr.askGroup({ question: 'Which DB?' });
+      mgr.notifyParticipantConnected(p.id);
+      expect(lastEmpty(events)).toBe(false); // approved + connected → non-empty
+
+      // Kick while still connected (kickParticipant does NOT close the socket).
+      mgr.kickParticipant(p.id);
+      // Kicked participant is no longer 'approved' → approved-connected count = 0 → empty.
+      expect(lastEmpty(events)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('WR-02: a question broadcast into an already-empty room emits room_empty_changed{is_empty:true}', () => {
+    const { mgr, events, cleanup } = makeMgrWithTimers();
+    try {
+      mgr.start({ brief: 'wr-02' });
+      // No participants connected at all → first question opens into an empty room.
+      const { ticket_id } = mgr.askGroup({ question: 'Q1?' });
+      expect(lastEmpty(events)).toBe(true);
+
+      // Resolve Q1 (clears the empty edge tracker).
+      const q1 = mgr.currentQuestion()!;
+      mgr.recordAnswer({ question_id: q1.id as QuestionId, value: 'x', source: 'override' });
+      void ticket_id;
+
+      // Open Q2 — still empty. A FRESH room_empty_changed{is_empty:true} must fire
+      // so the coordinator sees the notice on the new question (the web reducer
+      // cleared roomEmpty on resolve).
+      mgr.askGroup({ question: 'Q2?' });
+      expect(lastEmpty(events)).toBe(true);
+      // And there must be a distinct true-transition AFTER the resolve, not just the
+      // stale Q1 one: count the is_empty:true transitions ≥ 2.
+      expect(emptyTransitions(events).filter((v) => v === true).length).toBeGreaterThanOrEqual(2);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('reconnect after empty re-flips the room non-empty (level-triggered, idempotent)', () => {
+    const { mgr, events, cleanup } = makeMgrWithTimers();
+    try {
+      const { p } = setupSessionWithQuestion(mgr); // approved, question open, empty
+      mgr.notifyParticipantConnected(p.id);
+      expect(lastEmpty(events)).toBe(false);
+      mgr.notifyParticipantDisconnected(p.id);
+      expect(lastEmpty(events)).toBe(true);
+      mgr.notifyParticipantConnected(p.id);
+      expect(lastEmpty(events)).toBe(false);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('coordinator (synthetic id, not in roster) never counts toward approved-connected', () => {
+    const { mgr, events, cleanup } = makeMgrWithTimers();
+    try {
+      const { p } = setupSessionWithQuestion(mgr);
+      mgr.notifyParticipantConnected(p.id);
+      expect(lastEmpty(events)).toBe(false);
+      // A coordinator-style synthetic id is not in the roster → not 'approved' →
+      // connecting/disconnecting it does not change the approved-connected count.
+      mgr.notifyParticipantConnected('coordinator:fake-id-xyz');
+      mgr.notifyParticipantDisconnected('coordinator:fake-id-xyz');
+      expect(lastEmpty(events)).toBe(false); // still non-empty (Alice connected)
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('disconnecting a participant that was never connected is a pure no-op', () => {
+    const { mgr, events, cleanup } = makeMgrWithTimers();
+    try {
+      const { p } = setupSessionWithQuestion(mgr); // question open, empty (true)
+      const beforeCount = emptyTransitions(events).length;
+      mgr.notifyParticipantDisconnected('p_never_connected');
+      void p;
+      // No new transition emitted.
+      expect(emptyTransitions(events).length).toBe(beforeCount);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('no room_empty_changed when no question is open', () => {
+    const { mgr, events, cleanup } = makeMgrWithTimers();
+    try {
+      mgr.start({ brief: 'no-question' });
+      const p = mgr.addParticipant({ display_name: 'Alice' });
+      mgr.approveParticipant(p.id);
+      // No question opened — connect then disconnect
+      mgr.notifyParticipantConnected(p.id);
+      mgr.notifyParticipantDisconnected(p.id);
+      expect(events.find((e) => e.type === 'room_empty_changed')).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('multi-tab ref-count: two tabs → one disconnect → still non-empty; second disconnect → empty', () => {
+    const { mgr, events, cleanup } = makeMgrWithTimers();
+    try {
+      const { p } = setupSessionWithQuestion(mgr); // approved, question open
+      // Open two tabs (two connect calls for same participant)
+      mgr.notifyParticipantConnected(p.id); // refcount = 1
+      mgr.notifyParticipantConnected(p.id); // refcount = 2
+      expect(lastEmpty(events)).toBe(false); // non-empty
+      // First tab closes → refcount = 1, still approved+connected → non-empty.
+      mgr.notifyParticipantDisconnected(p.id);
+      expect(lastEmpty(events)).toBe(false);
+      // Second tab closes → refcount = 0 → empty.
+      mgr.notifyParticipantDisconnected(p.id);
+      expect(lastEmpty(events)).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('notifyParticipantConnected and Disconnected are no-ops when no active session', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
+    try {
+      const mgr = new SessionManager({
+        clock: fixedClock('2026-04-29T12:00:00Z'),
+        transcriptDir: dir,
+      });
+      expect(() => mgr.notifyParticipantConnected('p_abc')).not.toThrow();
+      expect(() => mgr.notifyParticipantDisconnected('p_abc')).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });

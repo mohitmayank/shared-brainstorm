@@ -1,5 +1,7 @@
 # Changelog
 
+## [3.1.1](https://github.com/mohitmayank/shared-brainstorm/compare/v3.1.0...v3.1.1) (2026-05-26)
+
 All notable changes to this project are documented here. This file is generated
 from [Conventional Commits](https://www.conventionalcommits.org/) by `release-it`
 using the `conventionalcommits` preset; do not edit released sections by hand.

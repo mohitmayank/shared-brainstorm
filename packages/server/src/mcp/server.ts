@@ -13,6 +13,7 @@ import {
   answerClarification,
   stopSession,
 } from './tools.js';
+import { openBrowser } from '../util/openBrowser.js';
 
 function textContent(text: string): { content: { type: 'text'; text: string }[] } {
   return { content: [{ type: 'text' as const, text }] };
@@ -27,7 +28,7 @@ export const TOOLS = [
   {
     name: 'startSession',
     description:
-      'Start a new shared-brainstorm session with an approval-gate flow. Returns session_id, public_url, invite_text (a pre-formatted message ready to paste), clipboard_copied (boolean — true if the invite was auto-copied to the OS clipboard), and coordinator_url (a one-time URL for the initiator to drive the session). Show the invite_text to the user so they can paste it into Slack/email/etc. Participants join as pending and must be approved by the coordinator.',
+      'Start a new shared-brainstorm session with an approval-gate flow. Returns session_id, public_url, invite_text (a pre-formatted message ready to paste), and coordinator_url (a one-time URL for the initiator to drive the session — opened automatically in their browser, also print it as a fallback). Show the invite_text to the user so they can paste it into Slack/email/etc. Participants join as pending and must be approved by the coordinator.',
     inputSchema: {
       type: 'object' as const,
       properties: {
@@ -162,7 +163,10 @@ export function runMcpStdio(): void {
     try {
       switch (name) {
         case 'startSession': {
-          const result = await startSession(raw);
+          // Inject the REAL browser launcher here, at the production composition
+          // root — NOT as a default inside startSession, so importing/testing
+          // startSession never spawns a browser tab.
+          const result = await startSession(raw, { openBrowser });
           return textContent(JSON.stringify(result));
         }
         case 'askGroup': {

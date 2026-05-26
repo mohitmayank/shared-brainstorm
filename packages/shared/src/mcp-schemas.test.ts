@@ -19,15 +19,18 @@ describe('MCP schemas', () => {
     expect(StartSessionInput.safeParse({ brief: 'auth' }).success).toBe(true);
   });
 
-  it('start_session output includes url, invite_text, clipboard_copied, coordinator_url (no join_code in v2.0.0)', () => {
+  it('start_session output includes url, invite_text, coordinator_url (no join_code, no clipboard_copied)', () => {
     const ok = StartSessionOutput.safeParse({
       session_id: 'sb_s_abc',
       public_url: 'https://x.trycloudflare.com',
       invite_text: 'Hi! Join: https://x.trycloudflare.com\n(Approval required)',
-      clipboard_copied: true,
       coordinator_url: 'https://x.trycloudflare.com/?role=coordinator&token=abc',
     });
     expect(ok.success).toBe(true);
+    if (ok.success) {
+      // clipboard_copied was removed — auto-copy is gone in favor of browser auto-open.
+      expect('clipboard_copied' in ok.data).toBe(false);
+    }
   });
 
   it('start_session output rejects join_code (removed in v2.0.0)', () => {
@@ -38,7 +41,6 @@ describe('MCP schemas', () => {
       public_url: 'https://x.trycloudflare.com',
       join_code: '123456',
       invite_text: 'Hi!',
-      clipboard_copied: true,
       coordinator_url: 'https://x.trycloudflare.com/?role=coordinator&token=abc',
     });
     expect(parsed.success).toBe(true);
@@ -52,7 +54,6 @@ describe('MCP schemas', () => {
       session_id: 'sb_s_abc',
       public_url: 'https://x.trycloudflare.com',
       invite_text: 'Hi!',
-      clipboard_copied: true,
     });
     expect(missing.success).toBe(false);
   });

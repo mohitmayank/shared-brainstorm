@@ -9,10 +9,10 @@ export const StartSessionOutput = z.object({
   session_id: z.string(),
   public_url: z.string().url(),
   invite_text: z.string(),
-  clipboard_copied: z.boolean(),
   // Phase 3 (COORD-01): one-time URL the human initiator opens to drive the
   // session from a coordinator browser view. REQUIRED (additive, wire-back-compat:
   // older clients ignore unknown fields). MUST NOT be embedded in invite_text.
+  // Opened automatically in the initiator's browser on startSession (best-effort).
   coordinator_url: z.string().url(),
 });
 export type StartSessionOutput = z.infer<typeof StartSessionOutput>;

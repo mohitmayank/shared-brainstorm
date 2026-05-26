@@ -15,6 +15,7 @@ import { ChatPanel } from '../components/ChatPanel.js';
 import { IdleNudgeBanner } from '../components/IdleNudgeBanner.js';
 import { EmptyRoomNotice } from '../components/EmptyRoomNotice.js';
 import { ShareLinkButton } from '../components/ShareLinkButton.js';
+import { PlannerLinkDialog } from '../components/PlannerLinkDialog.js';
 
 interface CoordinatorProps {
   session: WireSession;
@@ -86,6 +87,10 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
   // a room_idle_nudge for a different question arrives (new question_id breaks equality).
   // Mirrors the dismissedTunnelUrl pattern in App.tsx (Pitfall 3).
   const [dismissedIdleNudgeQuestionId, setDismissedIdleNudgeQuestionId] = useState<string | null>(null);
+  // On-load planner-link dialog. Per-load only (no persistence): true on mount,
+  // flips false on dismiss; a fresh page load re-shows it. Renders once publicUrl
+  // is known (it arrives with the welcome frame).
+  const [showPlannerDialog, setShowPlannerDialog] = useState<boolean>(true);
 
   // WR-02/WR-03: per-ticket fallback-timer handles. Keyed by ticket so a new
   // record supersedes its predecessor, a resolved question clears its own
@@ -299,6 +304,9 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
 
   return (
     <main aria-label="Coordinator view" data-testid="coordinator-page">
+      {publicUrl !== null && showPlannerDialog && (
+        <PlannerLinkDialog publicUrl={publicUrl} onDismiss={() => setShowPlannerDialog(false)} />
+      )}
       <div className="card coordinator-header">
         <h1>shared-brainstorm — coordinator</h1>
         <SessionStatusPill status={sessionStatus} />

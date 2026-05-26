@@ -30,7 +30,6 @@ import {
   selectTransport as defaultSelectTransport,
   validateBindOverride,
 } from '../transport/selectTransport.js';
-import { copyToClipboard as defaultCopyToClipboard } from '../util/clipboard.js';
 import { isTruthyEnv } from '../util/env.js';
 import { mcpState } from './state.js';
 
@@ -129,8 +128,15 @@ export interface StartSessionOpts {
   selectTransport?: typeof defaultSelectTransport;
   /** Override SPA dir resolution (tests only). `null` disables static serving. */
   staticDir?: string | null;
-  /** Injectable for tests; defaults to the real OS clipboard helper. */
-  copyToClipboard?: typeof defaultCopyToClipboard;
+  /**
+   * Browser launcher for the coordinator URL. The REAL OS launcher is injected
+   * ONLY by the production MCP entry point (mcp/server.ts). When omitted —
+   * every test and any other importer of startSession — NOTHING is launched.
+   * This is deliberate: the auto-open is a real-world side-effect that must not
+   * fire from the importable domain function, or `npm test` spawns a browser tab
+   * for every startSession call (the bug this guards against).
+   */
+  openBrowser?: (url: string) => Promise<string | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +150,6 @@ export async function startSession(
   session_id: string;
   public_url: string;
   invite_text: string;
-  clipboard_copied: boolean;
   coordinator_url: string;
 }> {
   if (mcpState.manager !== null) {
@@ -338,24 +343,28 @@ export async function startSession(
   // Phase 3 (COORD-01): compose the coordinator URL from the public URL using
   // the URL API so trailing slashes / pre-existing query strings are handled
   // correctly. This URL is surfaced as its own return field — it MUST NOT enter
-  // invite_text (auto-copied to clipboard); the MCP host prints it separately.
+  // invite_text; the MCP host prints it separately and it opens automatically below.
   const coordinatorToken = manager.coordinatorToken();
   const coordinatorUrlObj = new URL(publicUrl);
   coordinatorUrlObj.searchParams.set('role', 'coordinator');
   coordinatorUrlObj.searchParams.set('token', coordinatorToken);
   const coordinator_url = coordinatorUrlObj.toString();
 
-  const clipboardDisabled = isTruthyEnv(process.env['SHARED_BRAINSTORM_NO_CLIPBOARD']);
-  const copy = opts?.copyToClipboard ?? defaultCopyToClipboard;
-  const clipboard_copied = clipboardDisabled
-    ? false
-    : (await copy(invite_text).catch(() => null)) !== null;
+  // Best-effort: open the coordinator view in the initiator's default browser
+  // as soon as the session is up. Fire-and-forget — startup never waits on or
+  // fails from the launch (headless / no-browser → null, the host-printed URL is
+  // the fallback). Only fires when the production entry point (mcp/server.ts)
+  // injected the real launcher AND the user hasn't opted out; tests/importers
+  // pass nothing, so no browser ever opens from the suite. Opt out with
+  // SHARED_BRAINSTORM_NO_OPEN.
+  if (opts?.openBrowser && !isTruthyEnv(process.env['SHARED_BRAINSTORM_NO_OPEN'])) {
+    void opts.openBrowser(coordinator_url).catch(() => null);
+  }
 
   return {
     session_id,
     public_url: publicUrl,
     invite_text,
-    clipboard_copied,
     coordinator_url,
   };
 }

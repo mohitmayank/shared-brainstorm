@@ -23,7 +23,7 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
 
    ### Output fields
 
-   **`coordinator_url`** — a one-time URL the initiator (you, the human) can open in their own browser to drive the session from a coordinator view (see pending joiners, approve/kick participants, pick the final answer). Print this URL to the initiator on a line of its own — for example:
+   **`coordinator_url`** — a one-time URL the initiator (you, the human) uses to drive the session from a coordinator view (see pending joiners, approve/kick participants, pick the final answer). It **opens automatically in the initiator's default browser** when the session starts; still print it on a line of its own as a fallback (headless / no browser / opt-out via `SHARED_BRAINSTORM_NO_OPEN`) — for example:
 
    ```
    Your coordinator link (only for the initiator):

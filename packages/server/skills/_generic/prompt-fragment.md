@@ -3,7 +3,7 @@
 When the user runs `/shared-brainstorm` or asks to "brainstorm with the team":
 
 1. Call `start_session({ brief: "<topic>" })` and share the returned URL with teammates.
-   - `start_session` also returns `coordinator_url` — a one-time URL the initiator (the human) can open in their own browser to drive the session (see suggestions live, approve participants, pick the final answer). Print it on a line of its own:
+   - `start_session` also returns `coordinator_url` — a one-time URL the initiator (the human) uses to drive the session (see suggestions live, approve participants, pick the final answer). It opens automatically in the initiator's default browser when the session starts; still print it on a line of its own as a fallback:
      ```
      Your coordinator link (only for the initiator):
      {coordinator_url}

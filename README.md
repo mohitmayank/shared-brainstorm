@@ -61,7 +61,7 @@ Ask your agent to brainstorm with your team — for example:
 
 Your agent will:
 
-1. Spin up a session and hand you a share link (auto-copied to your clipboard).
+1. Spin up a session, open the coordinator view in your browser automatically, and hand you a share link for your teammates.
 2. Your teammates open the link — the host approves each one before they enter the session.
 3. Post questions to the live page (one at a time, or a batch). Teammates submit suggestions and comments in real time.
 4. Pick the final answer from the CLI or from the coordinator browser UI — or add your own answer as a planner first, then pick from the whole pool. Lock or kick participants as needed.

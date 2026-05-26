@@ -13,6 +13,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AskGroupUnionInput } from '@shared-brainstorm/shared';
 
+// Regression guard (browser-spam bug): startSession must NEVER call the real OS
+// browser launcher by default. The real launcher is injected only by the
+// production entry (mcp/server.ts); importing/testing startSession must spawn
+// nothing. Mocking the util lets the test below assert it stays untouched —
+// re-adding a `?? defaultOpenBrowser` default in tools.ts would call it and fail.
+vi.mock('../util/openBrowser.js', () => ({ openBrowser: vi.fn(async () => 'mock-launcher') }));
+import { openBrowser as mockedOpenBrowser } from '../util/openBrowser.js';
+
 function makeTmpDir(): string {
   return mkdtempSync(join(tmpdir(), 'sb-mcp-'));
 }
@@ -70,15 +78,15 @@ describe('startSession', () => {
         {
           transportFactory: 'mock',
           transcriptDir: dir,
-          // Stub clipboard so the test doesn't depend on the host OS.
-          copyToClipboard: async () => 'stub',
+          // Stub the browser launcher so the test doesn't open a real browser.
+          openBrowser: async () => 'stub',
         },
       );
       expect(result.session_id).toMatch(/^sb_s_/);
       expect(result.public_url).toMatch(/^http:\/\//);
       expect((result as unknown as Record<string, unknown>)['join_code']).toBeUndefined();
       expect(result.invite_text).toContain(result.public_url);
-      expect(result.clipboard_copied).toBe(true);
+      expect((result as unknown as Record<string, unknown>)['clipboard_copied']).toBeUndefined();
       expect(result.coordinator_url).toMatch(
         /^https?:\/\/.+\?role=coordinator&token=[A-Za-z0-9_-]{22}$/,
       );
@@ -91,7 +99,47 @@ describe('startSession', () => {
     }
   });
 
-  it('clipboard_copied is false when no clipboard tool is available', async () => {
+  it('does NOT invoke the real OS browser launcher by default (browser-spam regression)', async () => {
+    const dir = makeTmpDir();
+    vi.mocked(mockedOpenBrowser).mockClear();
+    try {
+      // No openBrowser opt → production launcher must NOT fire. This is the bug
+      // that opened a real tab for every startSession call during `npm test`.
+      const result = await startSession(
+        { brief: 'no-launch' },
+        { transportFactory: 'mock', transcriptDir: dir },
+      );
+      expect(result.coordinator_url).toContain('role=coordinator');
+      expect(mockedOpenBrowser).not.toHaveBeenCalled();
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('opens the coordinator_url in the browser on startup', async () => {
+    const dir = makeTmpDir();
+    let openedWith: string | null = null;
+    try {
+      const result = await startSession(
+        { brief: 'autolaunch' },
+        {
+          transportFactory: 'mock',
+          transcriptDir: dir,
+          openBrowser: async (url) => {
+            openedWith = url;
+            return 'stub';
+          },
+        },
+      );
+      expect(openedWith).toBe(result.coordinator_url);
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('startSession still resolves when the browser launcher throws (best-effort)', async () => {
     const dir = makeTmpDir();
     try {
       const result = await startSession(
@@ -99,41 +147,42 @@ describe('startSession', () => {
         {
           transportFactory: 'mock',
           transcriptDir: dir,
-          copyToClipboard: async () => null,
+          openBrowser: async () => {
+            throw new Error('no display');
+          },
         },
       );
-      expect(result.clipboard_copied).toBe(false);
-      // invite_text is still composed — clipboard is a nice-to-have.
+      // invite_text is still composed — the browser launch is a nice-to-have.
       expect(result.invite_text).toContain(result.public_url);
+      expect(result.coordinator_url).toContain('role=coordinator');
     } finally {
       await stopSession().catch(() => null);
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('SHARED_BRAINSTORM_NO_CLIPBOARD=1 suppresses clipboard copy entirely', async () => {
+  it('SHARED_BRAINSTORM_NO_OPEN=1 suppresses the browser launch entirely', async () => {
     const dir = makeTmpDir();
-    const original = process.env['SHARED_BRAINSTORM_NO_CLIPBOARD'];
-    process.env['SHARED_BRAINSTORM_NO_CLIPBOARD'] = '1';
-    let copyCalled = false;
+    const original = process.env['SHARED_BRAINSTORM_NO_OPEN'];
+    process.env['SHARED_BRAINSTORM_NO_OPEN'] = '1';
+    let openCalled = false;
     try {
       const result = await startSession(
         { brief: 'suppressed' },
         {
           transportFactory: 'mock',
           transcriptDir: dir,
-          copyToClipboard: async () => {
-            copyCalled = true;
+          openBrowser: async () => {
+            openCalled = true;
             return 'stub';
           },
         },
       );
-      expect(copyCalled).toBe(false);
-      expect(result.clipboard_copied).toBe(false);
+      expect(openCalled).toBe(false);
       expect(result.invite_text).toContain(result.public_url);
     } finally {
-      if (original === undefined) delete process.env['SHARED_BRAINSTORM_NO_CLIPBOARD'];
-      else process.env['SHARED_BRAINSTORM_NO_CLIPBOARD'] = original;
+      if (original === undefined) delete process.env['SHARED_BRAINSTORM_NO_OPEN'];
+      else process.env['SHARED_BRAINSTORM_NO_OPEN'] = original;
       await stopSession().catch(() => null);
       rmSync(dir, { recursive: true, force: true });
     }

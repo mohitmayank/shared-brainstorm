@@ -495,3 +495,48 @@ ul.suggestions li, ul.comments li {
 .share-link-button { padding: .25rem .75rem; font-size: .875rem; }
 .share-link-button:hover { opacity: .85; }
 .share-link-copied { font-size: .8rem; color: var(--text-muted); }
+
+/* Planner-link dialog (on-load coordinator invite prompt) */
+.planner-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 100;
+}
+.planner-dialog {
+  position: relative;
+  max-width: 30rem;
+  width: 100%;
+  box-shadow: var(--shadow);
+}
+.planner-dialog h2 { margin: 0 0 .5rem; }
+.planner-dialog-url {
+  display: block;
+  margin: .75rem 0;
+  padding: .5rem .75rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border-soft);
+  border-radius: 4px;
+  word-break: break-all;
+  font-size: .875rem;
+}
+.planner-dialog-actions { display: flex; align-items: center; gap: .5rem; }
+.planner-dialog-copy { padding: .35rem 1rem; }
+.planner-dialog-copy:hover { opacity: .85; }
+.planner-dialog-copied { font-size: .8rem; color: var(--text-muted); }
+.planner-dialog-dismiss {
+  position: absolute;
+  top: .5rem;
+  right: .5rem;
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+.planner-dialog-dismiss:hover { color: var(--text); }

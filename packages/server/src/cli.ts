@@ -85,7 +85,7 @@ Usage:
   shared-brainstorm --version
 Hosts: ${KNOWN_HOSTS.join(', ')}
 
-See README "Environment variables" for runtime tuning (rate limits, BIND, CLOUDFLARED_VERSION, NO_REDACT, NO_CLIPBOARD).`,
+See README "Environment variables" for runtime tuning (rate limits, BIND, CLOUDFLARED_VERSION, NO_REDACT, NO_OPEN).`,
       );
       return;
     case 'install': {

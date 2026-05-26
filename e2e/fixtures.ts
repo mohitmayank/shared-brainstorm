@@ -25,14 +25,14 @@ interface SessionFixture {
 export const test = base.extend<SessionFixture>({
   session: async ({}, use) => {
     const transcriptDir = mkdtempSync(join(tmpdir(), 'sb-e2e-'));
-    // Critical: pass copyToClipboard stub so test runs never paste invite text
-    // into the developer's OS clipboard.
+    // Critical: pass an openBrowser stub so test runs never launch a real
+    // browser against the developer's machine.
     const session = await startSession(
       { brief: 'e2e test' },
       {
         transportFactory: 'lan',
         transcriptDir,
-        copyToClipboard: async () => null,
+        openBrowser: async () => null,
       },
     );
     // REL-09 regression guard (Phase 2 / 02-04): LAN mode MUST NOT set

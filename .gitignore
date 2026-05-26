@@ -3,6 +3,7 @@ dist/
 coverage/
 .env
 .env.local
+.npmrc
 .DS_Store
 *.log
 *.pid

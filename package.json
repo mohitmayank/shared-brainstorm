@@ -20,15 +20,28 @@
     "lint": "ESLINT_USE_FLAT_CONFIG=false eslint packages --ext .ts,.tsx",
     "format": "prettier --write \"packages/**/*.{ts,tsx,json,md}\" \"*.{json,md}\"",
     "typecheck": "tsc -b packages/shared packages/server packages/web && tsc --noEmit -p e2e/tsconfig.json",
-    "release": "npm --workspace=packages/server run release"
+    "release": "npm --workspace=packages/server run release",
+    "commit": "cz",
+    "prepare": "husky"
+  },
+  "config": {
+    "commitizen": {
+      "path": "@commitlint/cz-commitlint"
+    }
   },
   "devDependencies": {
+    "@commitlint/cli": "^21.0.1",
+    "@commitlint/config-conventional": "^21.0.1",
+    "@commitlint/cz-commitlint": "^21.0.1",
     "@playwright/test": "^1.60.0",
+    "@release-it/conventional-changelog": "^11.0.0",
     "@types/node": "^22.7.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
+    "commitizen": "^4.3.1",
     "eslint": "^9.0.0",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "husky": "^9.1.7",
     "jsdom": "^29.1.0",
     "prettier": "^3.3.0",
     "release-it": "^20.0.1",

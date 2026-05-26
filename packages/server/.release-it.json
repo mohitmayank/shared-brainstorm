@@ -14,8 +14,15 @@
   },
   "github": {
     "release": true,
-    "releaseName": "v${version}",
-    "autoGenerate": true
+    "releaseName": "v${version}"
+  },
+  "plugins": {
+    "@release-it/conventional-changelog": {
+      "preset": {
+        "name": "conventionalcommits"
+      },
+      "infile": "../../CHANGELOG.md"
+    }
   },
   "hooks": {
     "before:init": [

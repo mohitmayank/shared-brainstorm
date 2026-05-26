@@ -66,6 +66,20 @@ async function main() {
     await copyFile(src, dest);
   }
 
+  // Copy root CHANGELOG into the package (npm omits CHANGELOG by default, so it is
+  // also listed in `files`). Non-fatal: a fresh checkout before the first release
+  // may not have one yet — release-it generates it during the release.
+  {
+    const src = resolve(repoRoot, 'CHANGELOG.md');
+    const dest = resolve(serverRoot, 'CHANGELOG.md');
+    if (await exists(src)) {
+      process.stdout.write(`Copying ${src} → ${dest}\n`);
+      await copyFile(src, dest);
+    } else {
+      process.stdout.write(`Skipping CHANGELOG.md (not found at ${src})\n`);
+    }
+  }
+
   process.stdout.write('prepack done.\n');
 }
 

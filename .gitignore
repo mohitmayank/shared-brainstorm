@@ -23,6 +23,7 @@ tasks
 packages/server/skills/
 packages/server/README.md
 packages/server/LICENSE
+packages/server/CHANGELOG.md
 
 # Local agent instructions (not tracked)
 CLAUDE.md

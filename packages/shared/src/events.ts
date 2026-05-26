@@ -90,6 +90,29 @@ const SessionViewSchema = z.object({
   chat: z.array(ChatEntrySchema), // Phase 7 (CHAT-01): durable session-level chat
 });
 
+// Terminal transport-failure payload (REL-03 / D-09). Single source of truth
+// shared by the `transport_failed` event and the `welcome.advisories` snapshot
+// so the two shapes can never drift.
+export const TransportFailedPayloadSchema = z.object({
+  code: z.enum(['cloudflared_permanent_failure', 'cloudflared_version_mismatch']),
+  message: z.string(),
+  restart_count: z.number().int().nonnegative(),
+  at: z.string(),
+});
+export type TransportFailedPayload = z.infer<typeof TransportFailedPayloadSchema>;
+
+// Currently-active, level-triggered advisories seeded into the `welcome` frame
+// so a coordinator who opens the link FRESH (no `last_seq` → no ring-buffer
+// replay) still sees an already-active notice. Only advisories with a clean
+// persistent level-state are carried; `room_idle_nudge` (transient, re-arms on
+// activity) is intentionally excluded. Each field is optional and omitted when
+// inactive, so an absent/empty `advisories` is the quiet default.
+export const AdvisoriesSchema = z.object({
+  room_empty: z.boolean().optional(),
+  transport_failed: TransportFailedPayloadSchema.optional(),
+});
+export type Advisories = z.infer<typeof AdvisoriesSchema>;
+
 const Envelope = <P extends z.ZodTypeAny>(type: string, payload: P) =>
   z.object({
     seq: z.number().int().nonnegative(),
@@ -107,6 +130,9 @@ export const ServerEvent = z.discriminatedUnion('type', [
       is_coordinator: z.boolean(),
       // Phase 14 (SHARE-01): participant join URL sent in welcome; absent for pre-Phase-14 servers
       public_url: z.string().url().optional(),
+      // Active level-triggered advisories seeded for fresh (no-replay) opens;
+      // absent for pre-advisory servers and when nothing is active.
+      advisories: AdvisoriesSchema.optional(),
     }),
   ),
   Envelope('participant_joined', z.object({ participant: ParticipantSchema })),
@@ -133,15 +159,7 @@ export const ServerEvent = z.discriminatedUnion('type', [
   ),
   Envelope('question_cancelled', z.object({ question_id: z.string(), reason: z.string() })),
   Envelope('tunnel_url_changed', z.object({ public_url: z.string().url() })),
-  Envelope(
-    'transport_failed',
-    z.object({
-      code: z.enum(['cloudflared_permanent_failure', 'cloudflared_version_mismatch']),
-      message: z.string(),
-      restart_count: z.number().int().nonnegative(),
-      at: z.string(),
-    }),
-  ),
+  Envelope('transport_failed', TransportFailedPayloadSchema),
   Envelope('session_ended', z.object({ reason: z.enum(['stop_session', 'signal', 'crash', 'ai_host_disconnected']) })),
   Envelope(
     'participant_status_changed',
@@ -181,6 +199,8 @@ export const EphemeralFrame = z.discriminatedUnion('type', [
       is_coordinator: z.boolean(),
       // Phase 14 (SHARE-01): participant join URL sent in welcome; absent for pre-Phase-14 servers
       public_url: z.string().url().optional(),
+      // Active level-triggered advisories seeded for fresh (no-replay) opens.
+      advisories: AdvisoriesSchema.optional(),
     }),
   }),
   z.object({ type: z.literal('heartbeat') }),

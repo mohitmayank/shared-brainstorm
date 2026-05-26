@@ -2442,3 +2442,97 @@ describe('empty room detection (ROOM-03 / CR-01)', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// currentAdvisories() — welcome-frame advisory seeding (cold-open gap fix)
+// ---------------------------------------------------------------------------
+
+const TRANSPORT_FAIL = {
+  type: 'transport_failed' as const,
+  payload: {
+    code: 'cloudflared_permanent_failure' as const,
+    message: 'tunnel down',
+    restart_count: 3,
+    at: '2026-04-29T12:00:00Z',
+  },
+};
+
+describe('currentAdvisories()', () => {
+  it('returns {} on a quiet session (no open question, no failure)', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'quiet' });
+      expect(mgr.currentAdvisories()).toEqual({});
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('reports room_empty:true once an open question is empty', () => {
+    const { mgr, cleanup } = makeMgrWithTimers();
+    try {
+      // setupSessionWithQuestion opens a question into an empty room → lastRoomEmpty=true
+      setupSessionWithQuestion(mgr);
+      expect(mgr.currentAdvisories()).toEqual({ room_empty: true });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('omits room_empty when the room is occupied', () => {
+    const { mgr, cleanup } = makeMgrWithTimers();
+    try {
+      const { p } = setupSessionWithQuestion(mgr);
+      mgr.notifyParticipantConnected(p.id); // approved + connected → non-empty
+      expect(mgr.currentAdvisories().room_empty).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('omits room_empty when no question is open even if a prior question went empty', () => {
+    const { mgr, cleanup } = makeMgrWithTimers();
+    try {
+      const { q } = setupSessionWithQuestion(mgr); // empty, question open
+      mgr.recordAnswer({ question_id: q.id, value: 'done', source: 'override' });
+      // No open question now → reevaluateRoomEmpty reset lastRoomEmpty to null.
+      expect(mgr.currentAdvisories().room_empty).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('reports transport_failed after the event is emitted (snapshotted at emit choke point)', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'fail' });
+      mgr.emitExternal(TRANSPORT_FAIL);
+      expect(mgr.currentAdvisories().transport_failed).toEqual(TRANSPORT_FAIL.payload);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('reports both room_empty and transport_failed together', () => {
+    const { mgr, cleanup } = makeMgrWithTimers();
+    try {
+      setupSessionWithQuestion(mgr); // empty open question
+      mgr.emitExternal(TRANSPORT_FAIL);
+      expect(mgr.currentAdvisories()).toEqual({
+        room_empty: true,
+        transport_failed: TRANSPORT_FAIL.payload,
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('throws when no session is active', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      expect(() => mgr.currentAdvisories()).toThrow(/no active session/);
+    } finally {
+      cleanup();
+    }
+  });
+});

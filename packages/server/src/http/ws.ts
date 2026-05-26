@@ -178,11 +178,18 @@ export function createWsRouter({
         manager.notifyParticipantConnected(sub.participantId);
       }
 
+      // Seed currently-active level-triggered advisories so a FRESH open (no
+      // lastSeq → no replay below) still sees an active empty-room / tunnel-down
+      // notice. Computed after notifyParticipantConnected so a just-connected
+      // participant already counts. Omitted (conditional spread) when nothing is
+      // active — matches the public_url idiom and keeps the frame minimal.
+      const advisories = manager.currentAdvisories();
+      const hasAdvisories = Object.keys(advisories).length > 0;
       send(
         JSON.stringify(
           me
-            ? { type: 'welcome', payload: { session: v, you: me, is_coordinator: false, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}) } }
-            : { type: 'welcome', payload: { session: v, is_coordinator: true, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}) } },
+            ? { type: 'welcome', payload: { session: v, you: me, is_coordinator: false, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}), ...(hasAdvisories ? { advisories } : {}) } }
+            : { type: 'welcome', payload: { session: v, is_coordinator: true, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}), ...(hasAdvisories ? { advisories } : {}) } },
         ),
       );
 

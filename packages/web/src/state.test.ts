@@ -38,6 +38,56 @@ describe('reduce — welcome (ephemeral, no seq)', () => {
   });
 });
 
+describe('reduce — welcome advisory seeding (cold-open gap)', () => {
+  const tf = {
+    code: 'cloudflared_permanent_failure' as const,
+    message: 'tunnel down',
+    restart_count: 3,
+    at: '2026-05-19T12:00:00.000Z',
+  };
+  const welcomeWith = (advisories: Record<string, unknown>): AnyFrame => ({
+    type: 'welcome',
+    payload: { ...welcomeEphemeral.payload, advisories },
+  } as AnyFrame);
+
+  it('seeds roomEmpty:true from advisories on a fresh open', () => {
+    const next = reduce(initialState, welcomeWith({ room_empty: true }));
+    expect(next.roomEmpty).toBe(true);
+  });
+
+  it('seeds transportFailed from advisories on a fresh open', () => {
+    const next = reduce(initialState, welcomeWith({ transport_failed: tf }));
+    expect(next.transportFailed).toEqual(tf);
+  });
+
+  it('seeds both advisories together', () => {
+    const next = reduce(initialState, welcomeWith({ room_empty: true, transport_failed: tf }));
+    expect(next.roomEmpty).toBe(true);
+    expect(next.transportFailed).toEqual(tf);
+  });
+
+  it('back-compat: welcome without advisories clears roomEmpty and preserves transportFailed', () => {
+    // A pre-advisory server omits the field. roomEmpty defaults false (WR-04);
+    // transportFailed survives welcome per the "cleared only on initialState" contract.
+    const prior = { ...initialState, roomEmpty: true, transportFailed: tf };
+    const next = reduce(prior, welcomeEphemeral);
+    expect(next.roomEmpty).toBe(false);
+    expect(next.transportFailed).toEqual(tf);
+  });
+
+  it('a later room_empty_changed{is_empty:false} still clears a seeded roomEmpty', () => {
+    const seeded = reduce(initialState, welcomeWith({ room_empty: true }));
+    expect(seeded.roomEmpty).toBe(true);
+    const cleared = reduce(seeded, {
+      seq: 5,
+      ts: '2026-05-19T12:00:01.000Z',
+      type: 'room_empty_changed',
+      payload: { is_empty: false },
+    } as AnyFrame);
+    expect(cleared.roomEmpty).toBe(false);
+  });
+});
+
 describe('reduce — isCoordinator', () => {
   const sessionShape = {
     session_id: 'sb_s_001',

@@ -153,6 +153,70 @@ describe('welcome — is_coordinator', () => {
   });
 });
 
+describe('welcome — advisories (cold-open seeding)', () => {
+  const advisories = {
+    room_empty: true,
+    transport_failed: {
+      code: 'cloudflared_permanent_failure' as const,
+      message: 'tunnel down',
+      restart_count: 3,
+      at: '2026-05-19T12:00:00.000Z',
+    },
+  };
+
+  it('parses a welcome carrying advisories', () => {
+    const ok = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, advisories },
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success) {
+      expect((ok.data.payload as { advisories?: typeof advisories }).advisories).toEqual(advisories);
+    }
+  });
+
+  it('parses an EphemeralFrame welcome carrying advisories', () => {
+    const ok = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, advisories },
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('parses a welcome with advisories omitted (back-compat with pre-advisory servers)', () => {
+    const ok = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true },
+    });
+    expect(ok.success).toBe(true);
+    if (ok.success && ok.data.type === 'welcome') {
+      expect((ok.data.payload as { advisories?: unknown }).advisories).toBeUndefined();
+    }
+  });
+
+  it('parses a partial advisories object (room_empty only)', () => {
+    const ok = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, advisories: { room_empty: true } },
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('rejects advisories with a malformed transport_failed.code', () => {
+    const bad = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        is_coordinator: true,
+        advisories: { transport_failed: { ...advisories.transport_failed, code: 'nope' } },
+      },
+    });
+    expect(bad.success).toBe(false);
+  });
+});
+
 describe('transport_failed event', () => {
   const validPayload = {
     code: 'cloudflared_permanent_failure' as const,

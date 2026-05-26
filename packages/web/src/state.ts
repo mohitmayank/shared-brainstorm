@@ -210,12 +210,26 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       lastSeq: Math.max(state.lastSeq, seq),
       banner: null,
       // WR-04: welcome re-primes authoritative state, so reset the advisory
-      // empty-room / idle-nudge flags. Any still-true state re-asserts via the
-      // ring-buffer-replayed room_* events that follow welcome; if the relevant
-      // event aged out of the buffer, this prevents a stale advisory from
-      // persisting forever (matches the sessionStatus/roomLocked re-prime contract).
+      // flags. On a reconnect, any still-true state re-asserts via the
+      // ring-buffer-replayed room_* events that follow welcome. On a FRESH open
+      // (no replay), the server seeds the active level-state in `advisories` so
+      // it is recovered here directly. idleNudge stays reset (transient, not
+      // carried in advisories) and relies on replay only.
       idleNudge: null,
-      roomEmpty: false,
+      // Seed from the welcome advisories snapshot; default false/null when the
+      // field is absent (pre-advisory server) or the advisory is inactive.
+      roomEmpty: p.advisories?.room_empty ?? false,
+      // Seed from advisories when present; otherwise PRESERVE the existing value
+      // (the documented "cleared only on initialState" contract — a ring-buffered
+      // transport_failed must not be wiped by a later welcome without advisories).
+      transportFailed: p.advisories?.transport_failed
+        ? {
+            code: p.advisories.transport_failed.code,
+            message: p.advisories.transport_failed.message,
+            restart_count: p.advisories.transport_failed.restart_count,
+            at: p.advisories.transport_failed.at,
+          }
+        : state.transportFailed,
       // Phase 14 (SHARE-01/02): project public_url into publicUrl when present;
       // leave unchanged (null) when absent (back-compat with older server builds).
       ...(p.public_url !== undefined ? { publicUrl: p.public_url } : {}),
@@ -541,11 +555,21 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
       // session_status_changed events (which may have aged out of the ring buffer).
       sessionStatus: evt.payload.session.session_status,
       banner: null,
-      // WR-04: reset advisory empty-room / idle-nudge flags on welcome re-prime
-      // (same rationale as the durable welcome branch); replayed room_* events
-      // re-assert any still-true state.
+      // WR-04: reset advisory flags on welcome re-prime (same rationale as the
+      // durable welcome branch). This is the PRODUCTION fresh-open path (ws.ts
+      // sends an ephemeral welcome with no seq → no replay), so seed the active
+      // level-state directly from advisories; idleNudge stays reset (transient,
+      // not carried), re-asserting via replay on a true reconnect only.
       idleNudge: null,
-      roomEmpty: false,
+      roomEmpty: evt.payload.advisories?.room_empty ?? false,
+      transportFailed: evt.payload.advisories?.transport_failed
+        ? {
+            code: evt.payload.advisories.transport_failed.code,
+            message: evt.payload.advisories.transport_failed.message,
+            restart_count: evt.payload.advisories.transport_failed.restart_count,
+            at: evt.payload.advisories.transport_failed.at,
+          }
+        : state.transportFailed,
       // Phase 14 (SHARE-01/02): project public_url into publicUrl when present;
       // leave unchanged (null) when absent (back-compat with older server builds).
       ...(evt.payload.public_url !== undefined ? { publicUrl: evt.payload.public_url } : {}),

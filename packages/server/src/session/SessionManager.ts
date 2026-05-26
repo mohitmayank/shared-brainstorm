@@ -21,6 +21,8 @@ import {
   type SessionView,
   type SessionStatus,
   type Transcript,
+  type Advisories,
+  type TransportFailedPayload,
 } from '@shared-brainstorm/shared';
 import { TicketStore } from './tickets.js';
 import { RingBuffer } from './ringBuffer.js';
@@ -119,6 +121,13 @@ interface ActiveSession {
    * drift. `null` = no empty-room signal has been emitted yet.
    */
   lastRoomEmpty: boolean | null;
+  /**
+   * Last terminal transport failure emitted via `emit()` (REL-03 / D-09).
+   * Snapshotted so `currentAdvisories()` can seed it into a fresh `welcome`
+   * frame — a coordinator who opens the link cold (no replay) must still see
+   * the tunnel-down state. `null` until a `transport_failed` event is emitted.
+   */
+  lastTransportFailed: TransportFailedPayload | null;
   /** CHATAI-01 / CHAT-01: durable session-level chat. */
   chat: ChatEntry[];
 }
@@ -171,6 +180,7 @@ export class SessionManager {
       idleTimers: new Map<QuestionId, ReturnType<typeof setTimeout>>(),
       connectedParticipants: new Map<string, number>(),
       lastRoomEmpty: null,
+      lastTransportFailed: null,
       chat: [],
     };
     return { session_id };
@@ -910,6 +920,26 @@ export class SessionManager {
     };
   }
 
+  /**
+   * Currently-active, level-triggered advisories for seeding a fresh `welcome`
+   * frame (cold open, no `last_seq` replay). Only states with a clean persistent
+   * level are returned; each key is omitted when inactive so the quiet default is
+   * an empty object. `room_idle_nudge` is intentionally excluded (transient,
+   * re-arms on activity — no meaningful current value). A true reconnect still
+   * recovers everything via ring-buffer replay; this only fills the cold-open gap.
+   */
+  currentAdvisories(): Advisories {
+    const a = this.requireActive();
+    const out: Advisories = {};
+    // room_empty is only meaningful while a question is open; mirror the
+    // reevaluateRoomEmpty() level (lastRoomEmpty === true) rather than recompute,
+    // so the seed never disagrees with the last emitted room_empty_changed.
+    const questionOpen = [...a.open_questions.values()].some((q) => q.status === 'broadcast');
+    if (questionOpen && a.lastRoomEmpty === true) out.room_empty = true;
+    if (a.lastTransportFailed) out.transport_failed = a.lastTransportFailed;
+    return out;
+  }
+
   replay(lastSeq: number): ServerEvent[] {
     return this.events.since(lastSeq, (e) => e.seq);
   }
@@ -1111,6 +1141,12 @@ export class SessionManager {
       ts: this.opts.clock.isoNow(),
       ...e,
     } as ServerEvent;
+    // Snapshot the terminal transport-failure so currentAdvisories() can seed a
+    // fresh welcome (the event itself is ring-buffered for reconnects; this
+    // covers the no-replay cold open). Recorded at the single emit choke point.
+    if (evt.type === 'transport_failed' && this.active) {
+      this.active.lastTransportFailed = evt.payload as TransportFailedPayload;
+    }
     this.events.push(evt);
     this.broadcaster(evt);
   }

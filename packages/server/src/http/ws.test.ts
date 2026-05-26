@@ -264,6 +264,53 @@ describe('coordinator upgrade', () => {
   });
 });
 
+describe('welcome advisories (cold-open seeding)', () => {
+  type WelcomeFrame = {
+    type: string;
+    payload?: { advisories?: { room_empty?: boolean; transport_failed?: { code: string } } };
+  };
+  const connectCoordinator = async (mgr: SessionManager, router: ReturnType<typeof createWsRouter>) => {
+    const sent: WelcomeFrame[] = [];
+    await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: (msg) => sent.push(JSON.parse(msg) as WelcomeFrame),
+      close: () => {},
+    });
+    return sent.find((m) => m.type === 'welcome')!;
+  };
+
+  it('omits advisories when nothing is active', async () => {
+    const { router, mgr } = setup();
+    const welcome = await connectCoordinator(mgr, router);
+    expect(welcome.payload?.advisories).toBeUndefined();
+  });
+
+  it('seeds transport_failed into a fresh-open welcome (the cold-open gap)', async () => {
+    const { router, mgr } = setup();
+    mgr.emitExternal({
+      type: 'transport_failed',
+      payload: {
+        code: 'cloudflared_permanent_failure',
+        message: 'tunnel down',
+        restart_count: 3,
+        at: '2026-04-29T12:00:00Z',
+      },
+    });
+    const welcome = await connectCoordinator(mgr, router);
+    expect(welcome.payload?.advisories?.transport_failed?.code).toBe('cloudflared_permanent_failure');
+  });
+
+  it('seeds room_empty into a fresh-open welcome when a question is open into an empty room', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    mgr.approveParticipant(p.id);
+    mgr.askGroup({ question: 'Which DB?' }); // open into an empty room → lastRoomEmpty=true
+    const welcome = await connectCoordinator(mgr, router);
+    expect(welcome.payload?.advisories?.room_empty).toBe(true);
+  });
+});
+
 describe('typing command — approved-participant gate', () => {
   it('Test 1: typing start from approved participant calls broadcastEphemeral with presence frame (actor_id server-derived)', async () => {
     const { router, mgr } = setup();

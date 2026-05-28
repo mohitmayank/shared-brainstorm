@@ -15,9 +15,20 @@ type WireComment = WireQuestion['comments'][number];
 type WireClarification = WireQuestion['clarifications'][number];
 /** CHAT-01: a single chat message from the wire schema (populated in Plan 07-02). */
 type WireChatEntry = WireSession['chat'][number];
+/** Planning-stream: derive the seed/mode/line shapes from the wire welcome seed. */
+type WireStreamSeed = NonNullable<WelcomePayload['stream']>;
+type WireStreamMode = WireStreamSeed['mode'];
+type WireStreamEntry = WireStreamSeed['recent'][number];
 
 // Exported aliases for component use — avoids branded-type mismatches
-export type { WireSession, WireParticipant, WireQuestion, WireSuggestion, WireComment, WireClarification, WireChatEntry };
+export type { WireSession, WireParticipant, WireQuestion, WireSuggestion, WireComment, WireClarification, WireChatEntry, WireStreamMode, WireStreamEntry };
+
+/**
+ * Planning-stream: cap on narration lines kept in browser memory. Oldest drop
+ * first. Independent of the server-side buffer cap — this only bounds the live
+ * view. The panel shows the most recent lines; older ones scroll out of memory.
+ */
+const STREAM_CAP = 100;
 
 /**
  * Snapshot of a terminal transport failure (REL-03 / D-09). Populated when the
@@ -102,6 +113,19 @@ export interface UiState {
    * Never persisted; never replayed on reconnect.
    */
   presence: Record<string, { activity: string; expiresAt: number }>;
+  /**
+   * Planning-stream: current narration audience, mirrored from the server's
+   * `stream_mode_changed` events and the `welcome.stream` seed. `off` while the
+   * feature is dormant or this viewer is not entitled. The coordinator shows the
+   * panel when `!== 'off'`; a participant only when `=== 'everyone'`.
+   */
+  streamMode: WireStreamMode;
+  /**
+   * Planning-stream: recent narration lines for this viewer, bounded to
+   * STREAM_CAP. Cleared on any downgrade away from `everyone` (participant) or
+   * to `off` (everyone) so narration never lingers past its audience.
+   */
+  stream: WireStreamEntry[];
 }
 
 export const initialState: UiState = {
@@ -119,6 +143,8 @@ export const initialState: UiState = {
   roomEmpty: false,
   publicUrl: null,
   presence: {},
+  streamMode: 'off',
+  stream: [],
 };
 
 function isServerEvent(frame: AnyFrame): frame is ServerEvent {
@@ -233,6 +259,11 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
       // Phase 14 (SHARE-01/02): project public_url into publicUrl when present;
       // leave unchanged (null) when absent (back-compat with older server builds).
       ...(p.public_url !== undefined ? { publicUrl: p.public_url } : {}),
+      // Planning-stream: welcome re-primes the stream from the audience-filtered
+      // seed. Absent seed (feature off / not entitled) → off + empty, so a
+      // reconnect never shows stale narration this viewer is no longer entitled to.
+      streamMode: p.stream?.mode ?? 'off',
+      stream: p.stream ? [...p.stream.recent] : [],
     };
   }
 
@@ -534,6 +565,22 @@ function applyServerEvent(state: UiState, evt: ServerEvent): UiState {
     return { ...state, lastSeq: seq, roomEmpty: p.is_empty };
   }
 
+  // Planning-stream: coordinator changed the narration audience. Clear the local
+  // buffer on any downgrade away from entitlement — a participant whenever the new
+  // mode is not `everyone`, anyone when it goes `off` — so narration never lingers
+  // in a browser past its audience. New live lines flow in via `planning_stream`.
+  if (type === 'stream_mode_changed') {
+    const p = payload<{ mode: WireStreamMode }>(evt);
+    const isParticipant = state.me !== null;
+    const clear = p.mode === 'off' || (isParticipant && p.mode !== 'everyone');
+    return {
+      ...state,
+      lastSeq: seq,
+      streamMode: p.mode,
+      stream: clear ? [] : state.stream,
+    };
+  }
+
   return { ...state, lastSeq: seq };
 }
 
@@ -573,6 +620,10 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
       // Phase 14 (SHARE-01/02): project public_url into publicUrl when present;
       // leave unchanged (null) when absent (back-compat with older server builds).
       ...(evt.payload.public_url !== undefined ? { publicUrl: evt.payload.public_url } : {}),
+      // Planning-stream: seed from the audience-filtered welcome seed (production
+      // fresh-open path). Absent → off + empty.
+      streamMode: evt.payload.stream?.mode ?? 'off',
+      stream: evt.payload.stream ? [...evt.payload.stream.recent] : [],
       // NOTE: do NOT update lastSeq — ephemeral welcome has no seq
     };
   }
@@ -599,6 +650,13 @@ function applyEphemeralFrame(state: UiState, evt: EphemeralFrame): UiState {
         [key]: { activity, expiresAt: Date.now() + 4000 },
       },
     };
+  }
+
+  // Planning-stream: a narration line. The server already audience-filters delivery
+  // (this frame only reaches an entitled viewer), so append unconditionally, bounded
+  // to STREAM_CAP (oldest drop first). Ephemeral — no lastSeq update.
+  if (evt.type === 'planning_stream') {
+    return { ...state, stream: [...state.stream, evt.payload].slice(-STREAM_CAP) };
   }
 
   // heartbeat — handled in ws.ts before reaching reducer

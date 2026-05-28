@@ -11,7 +11,7 @@ const makeMgr = () => {
   const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
   const events: ServerEvent[] = [];
   const mgr = new SessionManager({
-    clock: fixedClock('2026-04-29T12:00:00Z'),
+    clock: fixedClock('2026-04-29T12:00:00.000Z'),
     // Durable ServerEvents always carry 'seq'; only push those to the events array.
     broadcast: (e) => { if ('seq' in e) events.push(e as ServerEvent); },
     transcriptDir: dir,
@@ -34,7 +34,7 @@ const makeMgrWithEphemeral = () => {
   const events: ServerEvent[] = [];
   const ephemeral: EphemeralFrame[] = [];
   const mgr = new SessionManager({
-    clock: fixedClock('2026-04-29T12:00:00Z'),
+    clock: fixedClock('2026-04-29T12:00:00.000Z'),
     broadcast: (e) => {
       // Discriminate by presence of 'seq' — ServerEvent always has seq
       if ('seq' in e) {
@@ -62,7 +62,7 @@ const makeMgrWithCaps = (caps: {
   const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
   const events: ServerEvent[] = [];
   const mgr = new SessionManager({
-    clock: fixedClock('2026-04-29T12:00:00Z'),
+    clock: fixedClock('2026-04-29T12:00:00.000Z'),
     // Durable ServerEvents always carry 'seq'; only push those to the events array.
     broadcast: (e) => { if ('seq' in e) events.push(e as ServerEvent); },
     transcriptDir: dir,
@@ -484,7 +484,7 @@ describe('SessionManager', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
     try {
       const mgr = new SessionManager({
-        clock: fixedClock('2026-04-29T12:00:00Z'),
+        clock: fixedClock('2026-04-29T12:00:00.000Z'),
         transcriptDir: dir,
       });
       mgr.start({ brief: 'a' });
@@ -1535,7 +1535,7 @@ describe('postClarification', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
     const events: ServerEvent[] = [];
     const mgr = new SessionManager({
-      clock: fixedClock('2026-04-29T12:00:00Z'),
+      clock: fixedClock('2026-04-29T12:00:00.000Z'),
       broadcast: (e) => { if ('seq' in e) events.push(e as ServerEvent); },
       transcriptDir: dir,
       maxClarificationsPerQuestion: 1,
@@ -1768,7 +1768,7 @@ describe('postChat', () => {
     const { dir, cleanup } = makeMgr();
     const events: import('@shared-brainstorm/shared').ServerEvent[] = [];
     const capMgr = new SessionManager({
-      clock: fixedClock('2026-04-29T12:00:00Z'),
+      clock: fixedClock('2026-04-29T12:00:00.000Z'),
       broadcast: (e) => { if ('seq' in e) events.push(e as import('@shared-brainstorm/shared').ServerEvent); },
       transcriptDir: dir,
       maxChatMessages: 2,
@@ -2039,7 +2039,7 @@ describe('WR-01: ticket_to_question pruning', () => {
 const makeMgrWithTimers = (idleNudgeWindowMs = 120_000) => {
   const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
   const events: ServerEvent[] = [];
-  const clock = fixedClock('2026-04-29T12:00:00Z');
+  const clock = fixedClock('2026-04-29T12:00:00.000Z');
   // Fake timer storage: callbacks keyed by handle id
   let nextHandle = 1;
   const pending = new Map<number, { cb: () => void; ms: number }>();
@@ -2237,7 +2237,7 @@ describe('idle timer (ROOM-02)', () => {
     let capturedMs: number | undefined;
     try {
       const mgr = new SessionManager({
-        clock: fixedClock('2026-04-29T12:00:00Z'),
+        clock: fixedClock('2026-04-29T12:00:00.000Z'),
         transcriptDir: dir,
         setTimeoutFn: (_cb, ms) => {
           capturedMs = ms;
@@ -2432,7 +2432,7 @@ describe('empty room detection (ROOM-03 / CR-01)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sbsess-'));
     try {
       const mgr = new SessionManager({
-        clock: fixedClock('2026-04-29T12:00:00Z'),
+        clock: fixedClock('2026-04-29T12:00:00.000Z'),
         transcriptDir: dir,
       });
       expect(() => mgr.notifyParticipantConnected('p_abc')).not.toThrow();
@@ -2453,7 +2453,7 @@ const TRANSPORT_FAIL = {
     code: 'cloudflared_permanent_failure' as const,
     message: 'tunnel down',
     restart_count: 3,
-    at: '2026-04-29T12:00:00Z',
+    at: '2026-04-29T12:00:00.000Z',
   },
 };
 
@@ -2531,6 +2531,117 @@ describe('currentAdvisories()', () => {
     const { mgr, cleanup } = makeMgr();
     try {
       expect(() => mgr.currentAdvisories()).toThrow(/no active session/);
+    } finally {
+      cleanup();
+    }
+  });
+});
+
+describe('SessionManager planning-stream', () => {
+  it('defaults to off; pushStream drops without storing or broadcasting', () => {
+    const { mgr, ephemeral, cleanup } = makeMgrWithEphemeral();
+    try {
+      mgr.start({ brief: 'x' });
+      expect(mgr.getStreamMode()).toBe('off');
+      expect(mgr.pushStream('hello')).toEqual({ streamed: false });
+      expect(ephemeral.filter((f) => f.type === 'planning_stream')).toHaveLength(0);
+      // Nothing buffered → no seed even for the coordinator.
+      expect(mgr.currentStreamState(true)).toBeUndefined();
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('setStreamMode emits a replayable stream_mode_changed and is idempotent', () => {
+    const { mgr, events, cleanup } = makeMgr();
+    try {
+      mgr.start({ brief: 'x' });
+      mgr.setStreamMode('coordinator');
+      mgr.setStreamMode('coordinator'); // no-op
+      mgr.setStreamMode('everyone');
+      const modeEvents = events.filter((e) => e.type === 'stream_mode_changed');
+      expect(modeEvents.map((e) => (e.payload as { mode: string }).mode)).toEqual([
+        'coordinator',
+        'everyone',
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('pushStream buffers and broadcasts a planning_stream frame tagged with the mode', () => {
+    const { mgr, ephemeral, cleanup } = makeMgrWithEphemeral();
+    try {
+      mgr.start({ brief: 'x' });
+      mgr.setStreamMode('coordinator');
+      expect(mgr.pushStream('weighing A vs B')).toEqual({ streamed: true });
+      const frames = ephemeral.filter((f) => f.type === 'planning_stream');
+      expect(frames).toHaveLength(1);
+      const frame = frames[0] as Extract<EphemeralFrame, { type: 'planning_stream' }>;
+      expect(frame.audience).toBe('coordinator');
+      expect(frame.payload.text).toBe('weighing A vs B');
+      expect(frame.payload.at).toBe('2026-04-29T12:00:00.000Z');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('currentStreamState gates the recent buffer by audience', () => {
+    const { mgr, cleanup } = makeMgrWithEphemeral();
+    try {
+      mgr.start({ brief: 'x' });
+      mgr.setStreamMode('coordinator');
+      mgr.pushStream('line 1');
+      // coordinator-only: participant gets nothing, coordinator gets the buffer.
+      expect(mgr.currentStreamState(false)).toBeUndefined();
+      expect(mgr.currentStreamState(true)).toEqual({
+        mode: 'coordinator',
+        recent: [{ text: 'line 1', at: '2026-04-29T12:00:00.000Z' }],
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('clears the buffer on a mode change so an upgrade never re-seeds prior lines', () => {
+    const { mgr, cleanup } = makeMgrWithEphemeral();
+    try {
+      mgr.start({ brief: 'x' });
+      mgr.setStreamMode('coordinator');
+      mgr.pushStream('coordinator-only secret');
+      mgr.setStreamMode('everyone'); // upgrade clears the prior epoch
+      // A fresh participant now sees an empty recent list, not the pre-upgrade line.
+      expect(mgr.currentStreamState(false)).toEqual({ mode: 'everyone', recent: [] });
+      mgr.pushStream('public line');
+      expect(mgr.currentStreamState(false)).toEqual({
+        mode: 'everyone',
+        recent: [{ text: 'public line', at: '2026-04-29T12:00:00.000Z' }],
+      });
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('caps the recent buffer (oldest drop first)', () => {
+    const { mgr, cleanup } = makeMgrWithEphemeral();
+    try {
+      mgr.start({ brief: 'x' });
+      mgr.setStreamMode('everyone');
+      for (let i = 0; i < 250; i++) mgr.pushStream(`line ${i}`);
+      const seed = mgr.currentStreamState(true);
+      expect(seed?.recent).toHaveLength(200);
+      expect(seed?.recent[0]!.text).toBe('line 50'); // first 50 dropped
+      expect(seed?.recent[199]!.text).toBe('line 249');
+    } finally {
+      cleanup();
+    }
+  });
+
+  it('throws when no session is active', () => {
+    const { mgr, cleanup } = makeMgr();
+    try {
+      expect(() => mgr.getStreamMode()).toThrow(/no active session/);
+      expect(() => mgr.pushStream('x')).toThrow(/no active session/);
     } finally {
       cleanup();
     }

@@ -14,7 +14,7 @@ describe('MCP tool definitions', () => {
     expect(tool!.description).toMatch(/redaction/i);
   });
 
-  it('all six tools are listed (regression — includes answerClarification added in Plan 07-01)', () => {
+  it('all seven tools are listed (regression — includes streamPlanning, the 7th tool)', () => {
     expect(TOOLS.map((t) => t.name).sort()).toEqual([
       'answerClarification', // CHATAI-01: 6th tool added in Phase 7 Plan 01
       'askGroup',
@@ -22,7 +22,15 @@ describe('MCP tool definitions', () => {
       'recordAnswer',
       'startSession',
       'stopSession',
+      'streamPlanning', // planning-stream: 7th tool
     ]);
+  });
+
+  it('streamPlanning description names the kill-switch and the streamed:false back-off', () => {
+    const tool = TOOLS.find((t) => t.name === 'streamPlanning');
+    expect(tool).toBeDefined();
+    expect(tool!.description).toContain('SHARED_BRAINSTORM_NO_STREAM');
+    expect(tool!.description).toMatch(/streamed:false/);
   });
 
   it('description length stays under the safe truncation threshold', () => {

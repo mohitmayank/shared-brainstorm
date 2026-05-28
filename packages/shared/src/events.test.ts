@@ -387,3 +387,83 @@ describe('WelcomePayload public_url (Phase 14 SHARE-01)', () => {
     expect(bad.success).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Planning-stream: stream_mode_changed event, planning_stream ephemeral frame,
+// welcome stream seed.
+// ---------------------------------------------------------------------------
+describe('planning-stream wire contract', () => {
+  it('parses stream_mode_changed ServerEvent for each mode', () => {
+    for (const mode of ['off', 'coordinator', 'everyone'] as const) {
+      const ok = ServerEvent.safeParse({
+        seq: 3,
+        ts: '2026-01-01T00:00:00Z',
+        type: 'stream_mode_changed',
+        payload: { mode },
+      });
+      expect(ok.success).toBe(true);
+    }
+  });
+
+  it('rejects stream_mode_changed with an unknown mode', () => {
+    const bad = ServerEvent.safeParse({
+      seq: 3,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'stream_mode_changed',
+      payload: { mode: 'public' },
+    });
+    expect(bad.success).toBe(false);
+  });
+
+  it('parses a planning_stream EphemeralFrame with audience', () => {
+    const ok = EphemeralFrame.safeParse({
+      type: 'planning_stream',
+      payload: { text: 'considering option A', at: '2026-01-01T00:00:00Z' },
+      audience: 'coordinator',
+    });
+    expect(ok.success).toBe(true);
+  });
+
+  it('rejects a planning_stream frame missing audience', () => {
+    const bad = EphemeralFrame.safeParse({
+      type: 'planning_stream',
+      payload: { text: 'x', at: '2026-01-01T00:00:00Z' },
+    });
+    expect(bad.success).toBe(false);
+  });
+
+  it("rejects a planning_stream frame with audience 'off'", () => {
+    const bad = EphemeralFrame.safeParse({
+      type: 'planning_stream',
+      payload: { text: 'x', at: '2026-01-01T00:00:00Z' },
+      audience: 'off',
+    });
+    expect(bad.success).toBe(false);
+  });
+
+  it('accepts welcome with an optional stream seed (both forms)', () => {
+    const seed = { mode: 'everyone' as const, recent: [{ text: 'a', at: 'x' }] };
+    const ev = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true, stream: seed },
+    });
+    const eph = EphemeralFrame.safeParse({
+      type: 'welcome',
+      payload: { session: sessionShape, you: youShape, is_coordinator: false, stream: seed },
+    });
+    expect(ev.success).toBe(true);
+    expect(eph.success).toBe(true);
+  });
+
+  it('accepts welcome without a stream seed (back-compat)', () => {
+    const ok = ServerEvent.safeParse({
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: { session: sessionShape, is_coordinator: true },
+    });
+    expect(ok.success).toBe(true);
+  });
+});

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CoordinatorAnswerErrorBody } from '@shared-brainstorm/shared';
-import type { WireSession, WireParticipant, WireSuggestion } from '../state.js';
+import type { WireSession, WireParticipant, WireSuggestion, WireStreamMode, WireStreamEntry } from '../state.js';
 import {
   postCoordinatorAnswer,
   postCoordinatorSuggestion,
   postApprove,
   postKick,
   postLock,
+  postStreamMode,
 } from '../lib/api.js';
 import { DecisionsPanel } from '../components/coordinator/DecisionsPanel.js';
 import { CoordinatorQuestionCard } from '../components/coordinator/CoordinatorQuestionCard.js';
@@ -16,6 +17,8 @@ import { IdleNudgeBanner } from '../components/IdleNudgeBanner.js';
 import { EmptyRoomNotice } from '../components/EmptyRoomNotice.js';
 import { ShareLinkButton } from '../components/ShareLinkButton.js';
 import { PlannerLinkDialog } from '../components/PlannerLinkDialog.js';
+import { PendingJoinDialog } from '../components/PendingJoinDialog.js';
+import { PlanningStreamPanel } from '../components/PlanningStreamPanel.js';
 
 interface CoordinatorProps {
   session: WireSession;
@@ -36,6 +39,10 @@ interface CoordinatorProps {
    * pre-Phase-14 or URL not yet known. When non-null, renders the ShareLinkButton in the header.
    */
   publicUrl: string | null;
+  /** Planning-stream: current narration audience (off/coordinator/everyone). */
+  streamMode: WireStreamMode;
+  /** Planning-stream: recent narration lines for the coordinator. */
+  stream: WireStreamEntry[];
 }
 
 /** Per-ticket pick UI state (UI-SPEC Per-Component Contract). */
@@ -80,7 +87,7 @@ function nameFor(participants: WireParticipant[], id: string): string {
  * flips to resolved purely from the incoming `question_resolved` WS event
  * (handled by the reducer) — this component only drives the POST + error copy.
  */
-export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onChat, wsConnected, idleNudge, roomEmpty, publicUrl }: CoordinatorProps) {
+export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onChat, wsConnected, idleNudge, roomEmpty, publicUrl, streamMode, stream }: CoordinatorProps) {
   const openQuestions = session.questions ?? [];
   const [cards, setCards] = useState<Record<string, CardState>>({});
   // Phase 11 (ROOM-02): dismiss-ack keyed by question_id. Re-arms automatically when
@@ -91,6 +98,12 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
   // flips false on dismiss; a fresh page load re-shows it. Renders once publicUrl
   // is known (it arrives with the welcome frame).
   const [showPlannerDialog, setShowPlannerDialog] = useState<boolean>(true);
+  // Pending-join dialog: set of pending participant ids the coordinator has
+  // dismissed without deciding. A NEW joiner whose id isn't in the set
+  // re-opens the dialog automatically (see undismissedPending below). Approve
+  // and Disapprove don't add to the set — those participants leave the
+  // `pending` filter via the WS event, so the dialog narrows naturally.
+  const [dismissedPendingIds, setDismissedPendingIds] = useState<Set<string>>(new Set());
 
   // WR-02/WR-03: per-ticket fallback-timer handles. Keyed by ticket so a new
   // record supersedes its predecessor, a resolved question clears its own
@@ -300,12 +313,48 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
     }
   }, []);
 
+  const handleStreamMode = useCallback((mode: WireStreamMode) => {
+    // Optimistic; the WS stream_mode_changed event confirms + syncs every browser.
+    void postStreamMode({ mode }).catch(() => {
+      /* non-fatal — the current mode stays until the next successful change */
+    });
+  }, []);
+
+  // Pending-join dialog wiring. `pending` is computed off the live session
+  // participants; `undismissedPending` decides whether the dialog renders.
+  const pending = session.participants.filter((p) => p.status === 'pending');
+  const undismissedPending = pending.filter((p) => !dismissedPendingIds.has(p.id));
+  const showPendingDialog = undismissedPending.length > 0;
+
+  const handleDisapprove = useCallback((participantId: string) => {
+    // Reuses the same /api/coordinator/kick path as the roster Kick button —
+    // disapproval is just a kick at the pending stage.
+    void postKick({ participant_id: participantId }).catch(() => {
+      /* optimistic; WS participant_status_changed confirms */
+    });
+  }, []);
+
+  const handleDismissPendingDialog = useCallback(() => {
+    // Snapshot the currently-pending ids so a new joiner (id not in the set)
+    // re-opens the dialog automatically. Re-renders without a new joiner stay
+    // dismissed.
+    setDismissedPendingIds(new Set(pending.map((p) => p.id)));
+  }, [pending]);
+
   const hasContent = openQuestions.length > 0 || session.decisions.length > 0;
 
   return (
     <main aria-label="Coordinator view" data-testid="coordinator-page">
       {publicUrl !== null && showPlannerDialog && (
         <PlannerLinkDialog publicUrl={publicUrl} onDismiss={() => setShowPlannerDialog(false)} />
+      )}
+      {showPendingDialog && (
+        <PendingJoinDialog
+          pending={pending}
+          onApprove={handleApprove}
+          onDisapprove={handleDisapprove}
+          onDismiss={handleDismissPendingDialog}
+        />
       )}
       <div className="card coordinator-header">
         <h1>shared-brainstorm — coordinator</h1>
@@ -373,6 +422,9 @@ export function Coordinator({ session, roomLocked, sessionStatus, onPicking, onC
         onSend={onChat}
         connected={wsConnected}
       />
+
+      {/* Planning-stream: always shown to the coordinator (the control turns it on). */}
+      <PlanningStreamPanel stream={stream} mode={streamMode} onModeChange={handleStreamMode} />
 
       <div aria-live="polite" aria-relevant="additions text">
         {/* Phase 11 (ROOM-03): show empty-room notice above question cards when all approved participants left */}

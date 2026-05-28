@@ -117,3 +117,15 @@ export function postKick(args: { participant_id: string }): Promise<{ ok: boolea
 export function postLock(args: { locked: boolean }): Promise<{ ok: boolean }> {
   return post<{ ok: boolean }>('/api/coordinator/lock', args);
 }
+
+/**
+ * Planning-stream: the coordinator sets the narration audience (off / coordinator
+ * / everyone). POSTs to `/api/coordinator/stream`, gated server-side by the `sb_c`
+ * cookie. The server emits `stream_mode_changed` so every connected browser (and
+ * the agent, via the MCP tool's `streamed` flag) tracks the new mode.
+ */
+export function postStreamMode(args: {
+  mode: 'off' | 'coordinator' | 'everyone';
+}): Promise<{ ok: boolean }> {
+  return post<{ ok: boolean }>('/api/coordinator/stream', args);
+}

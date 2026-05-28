@@ -23,6 +23,9 @@ import {
   type Transcript,
   type Advisories,
   type TransportFailedPayload,
+  type StreamMode,
+  type StreamEntry,
+  type StreamSeed,
 } from '@shared-brainstorm/shared';
 import { TicketStore } from './tickets.js';
 import { RingBuffer } from './ringBuffer.js';
@@ -130,6 +133,21 @@ interface ActiveSession {
   lastTransportFailed: TransportFailedPayload | null;
   /** CHATAI-01 / CHAT-01: durable session-level chat. */
   chat: ChatEntry[];
+  /**
+   * Planning-stream: coordinator-controlled narration audience. `off` (default)
+   * drops all pushes; `coordinator` broadcasts only to the coordinator; `everyone`
+   * also broadcasts to participants. Enforced at the WS layer via the per-frame
+   * `audience`, never trusted from a client.
+   */
+  streamMode: StreamMode;
+  /**
+   * Recent narration lines for cold-open seeding. A standalone bounded buffer —
+   * deliberately NOT the `events` RingBuffer, so planning narration never enters
+   * the general `last_seq` replay path that fans out to everyone. Cleared on every
+   * mode change so it only ever holds lines from the current mode epoch (prevents
+   * coordinator-only lines re-seeding a participant after an upgrade to `everyone`).
+   */
+  streamBuffer: RingBuffer<StreamEntry>;
 }
 
 /**
@@ -140,6 +158,13 @@ interface ActiveSession {
  * repeatedly calling `askGroup` or `askGroupBatch`.
  */
 const MAX_OPEN_QUESTIONS = 20;
+
+/**
+ * Planning-stream: cap on recent narration lines retained for cold-open seeding.
+ * Oldest lines drop first (RingBuffer). Bounds memory for a chatty agent — live
+ * delivery is unaffected (each line is broadcast immediately, not queued).
+ */
+const STREAM_BUFFER_CAP = 200;
 
 export class SessionManager {
   private active: ActiveSession | null = null;
@@ -182,6 +207,8 @@ export class SessionManager {
       lastRoomEmpty: null,
       lastTransportFailed: null,
       chat: [],
+      streamMode: 'off',
+      streamBuffer: new RingBuffer<StreamEntry>(STREAM_BUFFER_CAP),
     };
     return { session_id };
   }
@@ -938,6 +965,63 @@ export class SessionManager {
     if (questionOpen && a.lastRoomEmpty === true) out.room_empty = true;
     if (a.lastTransportFailed) out.transport_failed = a.lastTransportFailed;
     return out;
+  }
+
+  // -------------------------------------------------------------------------
+  // Planning-stream (agent-pushed narration → audience-gated web view)
+  // -------------------------------------------------------------------------
+
+  /** Current narration audience. `off` while the feature is dormant (default). */
+  getStreamMode(): StreamMode {
+    return this.requireActive().streamMode;
+  }
+
+  /**
+   * Set the narration audience and announce it via the replayable
+   * `stream_mode_changed` event (the mode is non-sensitive). Idempotent: a no-op
+   * when unchanged. On any real change the recent-line buffer is cleared so it
+   * only ever holds lines from the current mode epoch — a fresh participant who
+   * connects after an upgrade to `everyone` must not be seeded coordinator-only
+   * lines produced before the switch.
+   */
+  setStreamMode(mode: StreamMode): void {
+    const a = this.requireActive();
+    if (a.streamMode === mode) return;
+    a.streamMode = mode;
+    a.streamBuffer = new RingBuffer<StreamEntry>(STREAM_BUFFER_CAP);
+    this.emit({ type: 'stream_mode_changed', payload: { mode } });
+  }
+
+  /**
+   * Append a (already-redacted) narration line. Dropped without storage when the
+   * mode is `off`. Otherwise buffered for cold-open seeding and broadcast as an
+   * ephemeral, self-describing `planning_stream` frame (`audience` = current mode)
+   * — the WS layer filters delivery, and the frame never enters the RingBuffer.
+   */
+  pushStream(text: string): { streamed: boolean } {
+    const a = this.requireActive();
+    if (a.streamMode === 'off') return { streamed: false };
+    const entry: StreamEntry = { text, at: this.opts.clock.isoNow() };
+    a.streamBuffer.push(entry);
+    this.broadcastEphemeral({
+      type: 'planning_stream',
+      payload: entry,
+      audience: a.streamMode,
+    });
+    return { streamed: true };
+  }
+
+  /**
+   * Per-audience stream snapshot for seeding a fresh `welcome` frame. Returns
+   * `undefined` (omit the seed) when the feature is off or the viewer is not
+   * entitled to the recent lines: a participant gets the buffer only under
+   * `everyone`; a coordinator gets it under `coordinator` or `everyone`.
+   */
+  currentStreamState(forCoordinator: boolean): StreamSeed | undefined {
+    const a = this.requireActive();
+    if (a.streamMode === 'off') return undefined;
+    if (a.streamMode === 'coordinator' && !forCoordinator) return undefined;
+    return { mode: a.streamMode, recent: a.streamBuffer.toArray() };
   }
 
   replay(lastSeq: number): ServerEvent[] {

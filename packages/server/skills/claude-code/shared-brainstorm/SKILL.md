@@ -136,6 +136,21 @@ Routes plan-mode questions to a live web page where teammates can discuss. The t
 8. **Stop the session**
    When done, call `stopSession`. The full transcript (every event, every question, every suggestion/comment, every decision) is written to `~/.shared-brainstorm/sessions/`.
 
+## Narrating your planning (optional — `streamPlanning`)
+
+Alongside the question/answer flow above, you may also push **short lines of planning narration** to the team's web view while you think:
+
+```
+streamPlanning({ text: "Considering token bucket — easier to reason about under bursty traffic" })
+→ { ok: true, streamed: true | false }
+```
+
+- **Audience is coordinator-controlled, off by default.** The coordinator picks Off / Just me / Everyone from the web UI. While Off (or globally disabled via `SHARED_BRAINSTORM_NO_STREAM=1`), every push returns `streamed: false` and is dropped.
+- **Soft no-op semantics.** Unlike the other tools, `streamPlanning` does NOT throw when there is no active session or the feature is disabled — it returns `{ ok: true, streamed: false }`. When you see `streamed: false`, **stop narrating** until you next see `streamed: true`; resume freely from then on. This keeps the loop cheap when no one is listening.
+- **What to send.** One concise sentence per call — what you are weighing, considering, or about to do. NOT verbose output, NOT code, NOT large quotes. Treat it like thinking aloud for the team, not a log dump. Max 4000 chars per call.
+- **Redaction.** Narration is scrubbed for paths / env-var assignments / high-entropy tokens before broadcast (same heuristics as `askGroup`) — but treat it as if participants can read it verbatim. Keep secrets out.
+- **Ephemeral.** Narration is **not** written to the transcript and **not** replayed on reconnect — only a small recent buffer is seeded into a fresh `welcome` for the entitled audience.
+
 ## Fallback
 
 If `startSession` fails (cloudflared unavailable, port conflict, etc.), fall back to the built-in `AskUserQuestion` tool to ask questions interactively instead. Inform the user that team brainstorm mode is unavailable.
@@ -179,5 +194,6 @@ Set env vars in the MCP server's `env` block (e.g. `~/.claude.json`) when the in
 | `CLOUDFLARED_VERSION` | `2025.11.1` | Pin the cloudflared binary version when using the `npx -p cloudflared` fallback. Ignored when system `cloudflared` is on PATH. |
 | `SHARED_BRAINSTORM_NO_CLIPBOARD` | unset | Set to `1` to skip auto-copying the invite text to the OS clipboard. |
 | `SHARED_BRAINSTORM_NO_REDACT` | unset | Set to `1` to disable question-text redaction (see Redaction section above). |
+| `SHARED_BRAINSTORM_NO_STREAM` | unset | Set to `1` to globally disable the `streamPlanning` tool (it becomes a permanent soft no-op — no UI, no broadcast, no buffer). Use when planning narration must never leak to the web view, regardless of coordinator choice. |
 
 Rate-limit format is `N/window`, where `window ∈ {sec, min, hour}` — e.g. `30/min`, `5/sec`, `100/hour`. Other window keys (`seconds`, `m`, `h`) trigger the fallback warning. See the project `README.md` "Environment variables" section for the canonical reference.

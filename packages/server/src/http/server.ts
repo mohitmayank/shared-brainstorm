@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import type { SessionManager } from '../session/SessionManager.js';
 import type { Participant, ParticipantId, QuestionId } from '@shared-brainstorm/shared';
-import { CoordinatorAnswerErrorBody } from '@shared-brainstorm/shared';
+import { CoordinatorAnswerErrorBody, StreamMode } from '@shared-brainstorm/shared';
 import {
   readCoordinatorCookie,
   readParticipantCookie,
@@ -61,6 +61,7 @@ const CoordinatorSuggestionBody = z.object({
 const ApproveBody = z.object({ participant_id: z.string() });
 const KickBody = z.object({ participant_id: z.string() });
 const LockBody = z.object({ locked: z.boolean() });
+const StreamBody = z.object({ mode: StreamMode });
 
 /**
  * REL-07 / D-06: type-narrowing guard for cap errors thrown by SessionManager.
@@ -379,6 +380,18 @@ export function buildApp({
     if (!parsed.success) return c.json({ error: 'invalid' }, 400);
     try {
       manager.setLocked(parsed.data.locked);
+      return c.json({ ok: true });
+    } catch {
+      return c.json({ error: 'session_ended' }, 404);
+    }
+  });
+
+  // Planning-stream: coordinator sets the narration audience (off/coordinator/everyone).
+  app.post('/api/coordinator/stream', requireCoordinator, async (c) => {
+    const parsed = StreamBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid' }, 400);
+    try {
+      manager.setStreamMode(parsed.data.mode);
       return c.json({ ok: true });
     } catch {
       return c.json({ error: 'session_ended' }, 404);

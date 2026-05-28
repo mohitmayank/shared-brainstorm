@@ -21,6 +21,7 @@ import { Session } from './pages/Session.js';
 import { Coordinator } from './pages/Coordinator.js';
 import { TunnelBanner } from './components/TunnelBanner.js';
 import { TransportFailedBanner } from './components/TransportFailedBanner.js';
+import { PlanningStreamPanel } from './components/PlanningStreamPanel.js';
 
 /**
  * COORD-01: parse `?role=coordinator&token=X` once at module evaluation so the
@@ -571,6 +572,8 @@ export function App() {
           idleNudge={state.idleNudge}
           roomEmpty={state.roomEmpty}
           publicUrl={state.publicUrl}
+          streamMode={state.streamMode}
+          stream={state.stream}
         />
       ) : coordinatorMode && coordinatorStatus === 'invalid' ? (
         <div className="card coordinator-error" data-testid="coordinator-error" role="alert">
@@ -615,17 +618,22 @@ export function App() {
           </div>
         </div>
       ) : hasSession ? (
-        <Session
-          session={state.session!}
-          me={state.me!}
-          sessionStatus={state.sessionStatus}
-          presence={state.presence}
-          myStatus={state.myStatus}
-          onTyping={sendTyping}
-          onAsk={sendAsk}
-          onChat={sendChat}
-          wsConnected={wsConnected}
-        />
+        <>
+          <Session
+            session={state.session!}
+            me={state.me!}
+            sessionStatus={state.sessionStatus}
+            presence={state.presence}
+            myStatus={state.myStatus}
+            onTyping={sendTyping}
+            onAsk={sendAsk}
+            onChat={sendChat}
+            wsConnected={wsConnected}
+          />
+          {/* Planning-stream: participants see the read-only panel only when the
+              coordinator has opened narration to everyone. */}
+          {state.streamMode === 'everyone' && <PlanningStreamPanel stream={state.stream} />}
+        </>
       ) : resuming && !needsJoin ? (
         <div className="card" style={{ marginTop: '2rem' }}>
           <p className="muted">Connecting…</p>

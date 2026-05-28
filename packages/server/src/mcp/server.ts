@@ -11,6 +11,7 @@ import {
   awaitAnswer,
   recordAnswer,
   answerClarification,
+  streamPlanning,
   stopSession,
 } from './tools.js';
 import { openBrowser } from '../util/openBrowser.js';
@@ -135,6 +136,27 @@ export const TOOLS = [
     },
   },
   {
+    name: 'streamPlanning',
+    description:
+      'Stream a short line of your planning narration to the team web view as you think. ' +
+      'Call this periodically while planning (one concise sentence per call — what you are ' +
+      'considering, weighing, or about to do), NOT verbose output or code. Off by default: ' +
+      'the coordinator opts in per session and chooses the audience, so a returned ' +
+      '`streamed:false` means it is disabled right now — stop narrating until it changes. ' +
+      'Text is redacted best-effort before broadcast; keep secrets out. Globally disabled with ' +
+      'SHARED_BRAINSTORM_NO_STREAM=1.',
+    inputSchema: {
+      type: 'object' as const,
+      properties: {
+        text: {
+          type: 'string',
+          description: 'One concise line of planning narration (1–4000 characters).',
+        },
+      },
+      required: ['text'],
+    },
+  },
+  {
     name: 'stopSession',
     description: 'End the active session, write the transcript, and clean up resources.',
     inputSchema: {
@@ -183,6 +205,10 @@ export function runMcpStdio(): void {
         }
         case 'answerClarification': {
           const result = answerClarification(raw);
+          return textContent(JSON.stringify(result));
+        }
+        case 'streamPlanning': {
+          const result = streamPlanning(raw);
           return textContent(JSON.stringify(result));
         }
         case 'stopSession': {

@@ -2176,3 +2176,203 @@ describe('welcome reducer publicUrl (Phase 14 SHARE-01)', () => {
     expect((next as unknown as Record<string, unknown>).publicUrl).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Planning-stream: state reducer
+// ---------------------------------------------------------------------------
+describe('reduce — planning-stream', () => {
+  const sessionShape = {
+    session_id: 'sb_s_stream',
+    brief: 'stream test',
+    participants: [] as never[],
+    decisions: [] as never[],
+    questions: [] as never[],
+    current_question: null,
+    locked: false,
+    session_status: 'waiting' as const,
+    chat: [] as never[],
+  };
+  const you = { id: 'sb_p_alice', display_name: 'Alice', joined_at: '2026-01-01T00:00:00Z', status: 'approved' as const };
+
+  it('welcome (ephemeral) with a stream seed populates streamMode + stream', () => {
+    const evt: AnyFrame = {
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        you,
+        is_coordinator: false,
+        stream: {
+          mode: 'everyone',
+          recent: [
+            { text: 'thinking A', at: '2026-01-01T00:00:00Z' },
+            { text: 'thinking B', at: '2026-01-01T00:00:01Z' },
+          ],
+        },
+      },
+    };
+    const next = reduce(initialState, evt);
+    expect(next.streamMode).toBe('everyone');
+    expect(next.stream).toEqual([
+      { text: 'thinking A', at: '2026-01-01T00:00:00Z' },
+      { text: 'thinking B', at: '2026-01-01T00:00:01Z' },
+    ]);
+  });
+
+  it('welcome (ephemeral) without a stream seed defaults streamMode=off and stream=[]', () => {
+    const evt: AnyFrame = {
+      type: 'welcome',
+      payload: { session: sessionShape, you, is_coordinator: false },
+    };
+    // Pre-fill to prove welcome re-primes the buffer (a reconnect must NOT
+    // show narration the viewer is no longer entitled to).
+    const prior = { ...initialState, streamMode: 'coordinator' as const, stream: [{ text: 'stale', at: 'x' }] };
+    const next = reduce(prior, evt);
+    expect(next.streamMode).toBe('off');
+    expect(next.stream).toEqual([]);
+  });
+
+  it('welcome (server event, durable) with a stream seed populates streamMode + stream', () => {
+    const evt: AnyFrame = {
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        is_coordinator: true,
+        stream: { mode: 'coordinator', recent: [{ text: 'only-me', at: 'x' }] },
+      },
+    };
+    const next = reduce(initialState, evt);
+    expect(next.streamMode).toBe('coordinator');
+    expect(next.stream).toEqual([{ text: 'only-me', at: 'x' }]);
+  });
+
+  it('planning_stream ephemeral frame appends to stream (no lastSeq update)', () => {
+    // Seed via welcome so streamMode is on; then push a live line.
+    const seeded = reduce(initialState, {
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        you,
+        is_coordinator: false,
+        stream: { mode: 'everyone', recent: [] },
+      },
+    } as AnyFrame);
+    const lineFrame: EphemeralFrame = {
+      type: 'planning_stream',
+      payload: { text: 'live line', at: '2026-01-01T00:00:05Z' },
+      audience: 'everyone',
+    };
+    const next = reduce(seeded, lineFrame as AnyFrame);
+    expect(next.stream).toEqual([{ text: 'live line', at: '2026-01-01T00:00:05Z' }]);
+    expect(next.lastSeq).toBe(seeded.lastSeq); // ephemeral — no seq bump
+  });
+
+  it('planning_stream caps the local buffer (oldest drop first)', () => {
+    let state = reduce(initialState, {
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        you,
+        is_coordinator: false,
+        stream: { mode: 'everyone', recent: [] },
+      },
+    } as AnyFrame);
+    // Push 150 lines — STREAM_CAP=100, so we expect the last 100 to remain.
+    for (let i = 0; i < 150; i++) {
+      state = reduce(state, {
+        type: 'planning_stream',
+        payload: { text: `line ${i}`, at: 't' },
+        audience: 'everyone',
+      } as unknown as AnyFrame);
+    }
+    expect(state.stream).toHaveLength(100);
+    expect(state.stream[0]!.text).toBe('line 50');
+    expect(state.stream[99]!.text).toBe('line 149');
+  });
+
+  it('stream_mode_changed updates mode; participant downgrade (everyone→coordinator) clears the local buffer', () => {
+    // Start as a participant under `everyone` with lines buffered.
+    let state = reduce(initialState, {
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        you,
+        is_coordinator: false,
+        stream: { mode: 'everyone', recent: [{ text: 'old', at: 't' }] },
+      },
+    } as AnyFrame);
+    state = reduce(state, {
+      seq: 1,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'stream_mode_changed',
+      payload: { mode: 'coordinator' },
+    } as AnyFrame);
+    expect(state.streamMode).toBe('coordinator');
+    expect(state.stream).toEqual([]);
+    expect(state.lastSeq).toBe(1);
+  });
+
+  it('stream_mode_changed → off clears the buffer for everyone (coordinator too)', () => {
+    // Coordinator (no `you`) under `everyone` with a buffered line.
+    let state = reduce(initialState, {
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        is_coordinator: true,
+        stream: { mode: 'everyone', recent: [{ text: 'a', at: 't' }] },
+      },
+    } as AnyFrame);
+    state = reduce(state, {
+      seq: 1,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'stream_mode_changed',
+      payload: { mode: 'off' },
+    } as AnyFrame);
+    expect(state.streamMode).toBe('off');
+    expect(state.stream).toEqual([]);
+  });
+
+  it('stream_mode_changed everyone→coordinator preserves the coordinator buffer (still entitled)', () => {
+    // Coordinator (me=null, is_coordinator=true).
+    let state = reduce(initialState, {
+      seq: 0,
+      ts: '2026-01-01T00:00:00Z',
+      type: 'welcome',
+      payload: {
+        session: sessionShape,
+        is_coordinator: true,
+        stream: { mode: 'everyone', recent: [{ text: 'keep me', at: 't' }] },
+      },
+    } as AnyFrame);
+    state = reduce(state, {
+      seq: 1,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'stream_mode_changed',
+      payload: { mode: 'coordinator' },
+    } as AnyFrame);
+    expect(state.streamMode).toBe('coordinator');
+    // Coordinator stays entitled — buffer survives a downgrade away from `everyone`.
+    expect(state.stream).toEqual([{ text: 'keep me', at: 't' }]);
+  });
+
+  it('participant upgrade off→everyone keeps an already-empty buffer (no leak vector)', () => {
+    // Participant starts with mode=off, empty stream (default).
+    let state = reduce(initialState, {
+      type: 'welcome',
+      payload: { session: sessionShape, you, is_coordinator: false },
+    } as AnyFrame);
+    expect(state.streamMode).toBe('off');
+    expect(state.stream).toEqual([]);
+    state = reduce(state, {
+      seq: 1,
+      ts: '2026-01-01T00:00:10Z',
+      type: 'stream_mode_changed',
+      payload: { mode: 'everyone' },
+    } as AnyFrame);
+    expect(state.streamMode).toBe('everyone');
+    expect(state.stream).toEqual([]);
+  });
+});

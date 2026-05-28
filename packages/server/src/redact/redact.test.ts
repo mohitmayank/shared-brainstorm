@@ -202,3 +202,36 @@ describe('redactQuestion — SHARED_BRAINSTORM_NO_REDACT opt-out', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Planning-stream: redactStreamLine mirrors the askGroup opt-out semantics so
+// the kill-switch behaves identically on both surfaces. The MCP tool layer
+// calls this before pushing into SessionManager; participants should see the
+// same scrubbing they get on question text.
+// ---------------------------------------------------------------------------
+describe('redactStreamLine', () => {
+  const ORIGINAL = process.env['SHARED_BRAINSTORM_NO_REDACT'];
+
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env['SHARED_BRAINSTORM_NO_REDACT'];
+    else process.env['SHARED_BRAINSTORM_NO_REDACT'] = ORIGINAL;
+    vi.resetModules();
+  });
+
+  it('redacts paths / env-var assignments / high-entropy tokens by default', async () => {
+    delete process.env['SHARED_BRAINSTORM_NO_REDACT'];
+    vi.resetModules();
+    const { redactStreamLine } = await import('./redact.js');
+    const out = redactStreamLine('reading /home/alice/.ssh/id_rsa with API_KEY=sk-aaaaaaaaaaaaaaaaaaaaaaaa');
+    expect(out).toContain('<PATH>');
+    expect(out).not.toContain('/home/alice');
+    expect(out).not.toContain('sk-aaaaaaaaaaaaaaaaaaaaaaaa');
+  });
+
+  it('is pass-through when SHARED_BRAINSTORM_NO_REDACT is set', async () => {
+    process.env['SHARED_BRAINSTORM_NO_REDACT'] = '1';
+    vi.resetModules();
+    const { redactStreamLine } = await import('./redact.js');
+    expect(redactStreamLine('cat /home/alice/.ssh/id_rsa')).toBe('cat /home/alice/.ssh/id_rsa');
+  });
+});

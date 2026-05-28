@@ -5,6 +5,7 @@ import {
   askGroup,
   awaitAnswer,
   recordAnswer,
+  streamPlanning,
   stopSession,
 } from './tools.js';
 import type { Transport, TransportErrorReason } from '../transport/Transport.js';
@@ -720,6 +721,65 @@ describe('transport_failed (REL-03 wiring)', () => {
       expect(msg).not.toContain('--no-cloudflared');
     } finally {
       consoleSpy.mockRestore();
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('streamPlanning', () => {
+  const NO_STREAM = 'SHARED_BRAINSTORM_NO_STREAM';
+
+  it('soft no-ops (no throw) when there is no active session', () => {
+    expect(mcpState.manager).toBeNull();
+    expect(streamPlanning({ text: 'thinking out loud' })).toEqual({ ok: true, streamed: false });
+  });
+
+  it('throws on schema-invalid input even when dormant', () => {
+    expect(() => streamPlanning({ text: '' })).toThrow();
+    expect(() => streamPlanning({})).toThrow();
+  });
+
+  it('soft no-ops under SHARED_BRAINSTORM_NO_STREAM even with an active session', async () => {
+    const dir = makeTmpDir();
+    const prev = process.env[NO_STREAM];
+    process.env[NO_STREAM] = '1';
+    try {
+      await startSession({ brief: 'x' }, { transportFactory: 'mock', transcriptDir: dir });
+      mcpState.manager!.setStreamMode('everyone');
+      expect(streamPlanning({ text: 'should be dropped' })).toEqual({ ok: true, streamed: false });
+    } finally {
+      if (prev === undefined) delete process.env[NO_STREAM];
+      else process.env[NO_STREAM] = prev;
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('delegates to the manager: streamed:false when mode off, true when on', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'x' }, { transportFactory: 'mock', transcriptDir: dir });
+      // default off -> dropped
+      expect(streamPlanning({ text: 'while off' })).toEqual({ ok: true, streamed: false });
+      mcpState.manager!.setStreamMode('coordinator');
+      expect(streamPlanning({ text: 'considering A' })).toEqual({ ok: true, streamed: true });
+    } finally {
+      await stopSession().catch(() => null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('redacts narration before it reaches the buffer', async () => {
+    const dir = makeTmpDir();
+    try {
+      await startSession({ brief: 'x' }, { transportFactory: 'mock', transcriptDir: dir });
+      mcpState.manager!.setStreamMode('coordinator');
+      streamPlanning({ text: 'reading /Users/alice/secret/creds.txt now' });
+      const seed = mcpState.manager!.currentStreamState(true);
+      expect(seed?.recent[0]!.text).toContain('<PATH>');
+      expect(seed?.recent[0]!.text).not.toContain('alice');
+    } finally {
       await stopSession().catch(() => null);
       rmSync(dir, { recursive: true, force: true });
     }

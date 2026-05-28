@@ -281,6 +281,15 @@ ul.suggestions li, ul.comments li {
 .coordinator-lock-toggle[aria-pressed='true'] { border-color: var(--accent); }
 .coordinator-roster-kicked { display: flex; align-items: center; gap: .5rem; padding: .25rem .5rem; opacity: 0.6; }
 
+/* ----- Planning-stream: AI narration panel ------------------------------- */
+.planning-stream-header { display: flex; align-items: center; justify-content: space-between; gap: .5rem; margin-bottom: .5rem; }
+.planning-stream-header h2 { font-size: 1rem; margin: 0; }
+.planning-stream-modes { display: flex; gap: .25rem; }
+.planning-stream-mode { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: .15rem .6rem; cursor: pointer; color: var(--text); font-size: .8125rem; }
+.planning-stream-mode[aria-pressed='true'] { border-color: var(--accent); background: var(--surface-3); }
+.planning-stream-lines { max-height: 14rem; overflow-y: auto; display: flex; flex-direction: column; gap: .25rem; }
+.planning-stream-line { margin: 0; padding: .25rem .5rem; background: var(--surface-2); border-radius: 4px; font-size: .875rem; white-space: pre-wrap; word-break: break-word; }
+
 /* ----- Phase 5: Live Presence & Progress --------------------------------
    All additive on existing tokens. No new color values, no new font-faces.
    @media (prefers-reduced-motion) is the sole sanctioned exception (see
@@ -540,3 +549,14 @@ ul.suggestions li, ul.comments li {
   color: var(--text-muted);
 }
 .planner-dialog-dismiss:hover { color: var(--text); }
+
+/* Pending-join dialog — reuses .planner-dialog* (backdrop, card, ×) and adds
+   per-row layout. Approve/Disapprove buttons inherit the same visual language
+   as the roster fallback (.coordinator-roster-approve / .coordinator-roster-kick). */
+.pending-join-list { list-style: none; padding: 0; margin: .75rem 0 0; display: flex; flex-direction: column; gap: .35rem; }
+.pending-join-row { display: flex; align-items: center; gap: .5rem; padding: .35rem .5rem; background: var(--surface-2); border-radius: 4px; }
+.pending-join-name { flex: 1; }
+.pending-join-approve { background: var(--accent); color: var(--accent-fg); border: none; border-radius: 4px; padding: .15rem .5rem; cursor: pointer; font-size: .875rem; }
+.pending-join-approve:hover { opacity: .85; }
+.pending-join-disapprove { background: transparent; color: var(--error); border: 1px solid var(--error); border-radius: 4px; padding: .15rem .5rem; cursor: pointer; font-size: .875rem; }
+.pending-join-disapprove:hover { background: var(--error); color: var(--accent-fg); }

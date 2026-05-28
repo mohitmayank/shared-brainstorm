@@ -185,11 +185,17 @@ export function createWsRouter({
       // active — matches the public_url idiom and keeps the frame minimal.
       const advisories = manager.currentAdvisories();
       const hasAdvisories = Object.keys(advisories).length > 0;
+      // Planning-stream cold-open seed, audience-filtered per connection: a
+      // participant is seeded recent lines only under `everyone`; the coordinator
+      // under `coordinator` or `everyone`. Omitted otherwise. The narration buffer
+      // is never replayed (it is not in the RingBuffer), so this seed is the only
+      // way a fresh open recovers recent lines it is entitled to.
+      const stream = manager.currentStreamState(isCoordinator);
       send(
         JSON.stringify(
           me
-            ? { type: 'welcome', payload: { session: v, you: me, is_coordinator: false, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}), ...(hasAdvisories ? { advisories } : {}) } }
-            : { type: 'welcome', payload: { session: v, is_coordinator: true, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}), ...(hasAdvisories ? { advisories } : {}) } },
+            ? { type: 'welcome', payload: { session: v, you: me, is_coordinator: false, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}), ...(hasAdvisories ? { advisories } : {}), ...(stream ? { stream } : {}) } }
+            : { type: 'welcome', payload: { session: v, is_coordinator: true, ...(currentPublicUrl ? { public_url: currentPublicUrl } : {}), ...(hasAdvisories ? { advisories } : {}), ...(stream ? { stream } : {}) } },
         ),
       );
 
@@ -351,8 +357,14 @@ export function createWsRouter({
     },
 
     broadcast(event) {
+      // Planning-stream audience gate: a `planning_stream` frame is self-describing
+      // — `audience:'coordinator'` reaches only coordinator subs; `audience:'everyone'`
+      // reaches all. Enforced HERE (not just in the UI) because participants hold the
+      // join link, so hiding-in-UI is insufficient. Frames are never seq'd/replayed.
+      const coordinatorOnly = 'audience' in event && event.audience !== 'everyone';
       const text = JSON.stringify(event);
       for (const s of subs) {
+        if (coordinatorOnly && !s.isCoordinator) continue;
         try {
           s.send(text);
         } catch {

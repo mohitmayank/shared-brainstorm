@@ -853,3 +853,106 @@ describe('post_chat command', () => {
     expect(chat[0]!.actor_id).toBe(p.id);
   });
 });
+
+describe('WS planning-stream audience', () => {
+  it('coordinator-mode planning_stream reaches only the coordinator, not participants', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    const partSent: Array<{ type: string }> = [];
+    const coordSent: Array<{ type: string }> = [];
+    await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: (m) => partSent.push(JSON.parse(m) as { type: string }),
+      close: () => {},
+    });
+    await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: (m) => coordSent.push(JSON.parse(m) as { type: string }),
+      close: () => {},
+    });
+    partSent.length = 0;
+    coordSent.length = 0;
+    mgr.setStreamMode('coordinator');
+    mgr.pushStream('secret reasoning');
+    // mode change is non-sensitive → both see it
+    expect(partSent.some((m) => m.type === 'stream_mode_changed')).toBe(true);
+    expect(coordSent.some((m) => m.type === 'stream_mode_changed')).toBe(true);
+    // narration is audience-gated → coordinator only
+    expect(coordSent.some((m) => m.type === 'planning_stream')).toBe(true);
+    expect(partSent.some((m) => m.type === 'planning_stream')).toBe(false);
+  });
+
+  it('everyone-mode planning_stream reaches both coordinator and participants', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    const partSent: Array<{ type: string }> = [];
+    const coordSent: Array<{ type: string }> = [];
+    await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: (m) => partSent.push(JSON.parse(m) as { type: string }),
+      close: () => {},
+    });
+    await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: (m) => coordSent.push(JSON.parse(m) as { type: string }),
+      close: () => {},
+    });
+    partSent.length = 0;
+    coordSent.length = 0;
+    mgr.setStreamMode('everyone');
+    mgr.pushStream('shared reasoning');
+    expect(partSent.some((m) => m.type === 'planning_stream')).toBe(true);
+    expect(coordSent.some((m) => m.type === 'planning_stream')).toBe(true);
+  });
+
+  it('planning_stream never enters the replay path (ephemeral, no seq)', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    mgr.setStreamMode('everyone');
+    mgr.pushStream('a buffered line');
+    const sent2: Array<{ type: string }> = [];
+    await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: (m) => sent2.push(JSON.parse(m) as { type: string }),
+      close: () => {},
+      lastSeq: 0,
+    });
+    // The line surfaces via the welcome seed, never as a replayed planning_stream event.
+    expect(sent2.some((m) => m.type === 'planning_stream')).toBe(false);
+  });
+
+  it('welcome seeds recent lines only for the entitled audience', async () => {
+    const { router, mgr } = setup();
+    const p = mgr.addParticipant({ display_name: 'Alice' });
+    mgr.setStreamMode('coordinator');
+    mgr.pushStream('coordinator only');
+
+    const partSent: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    await router.connect({
+      cookieParticipantId: p.id,
+      isCoordinator: false,
+      send: (m) => partSent.push(JSON.parse(m)),
+      close: () => {},
+    });
+    const partWelcome = partSent.find((m) => m.type === 'welcome')!;
+    expect(partWelcome.payload['stream']).toBeUndefined();
+
+    const coordSent: Array<{ type: string; payload: Record<string, unknown> }> = [];
+    await router.connect({
+      cookieParticipantId: null,
+      isCoordinator: true,
+      send: (m) => coordSent.push(JSON.parse(m)),
+      close: () => {},
+    });
+    const coordWelcome = coordSent.find((m) => m.type === 'welcome')!;
+    expect(coordWelcome.payload['stream']).toEqual({
+      mode: 'coordinator',
+      recent: [{ text: 'coordinator only', at: '2026-04-29T12:00:00.000Z' }],
+    });
+  });
+});

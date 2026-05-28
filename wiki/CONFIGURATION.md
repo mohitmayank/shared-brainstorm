@@ -11,6 +11,7 @@ All runtime tuning is via environment variables. Set them in the MCP server's `e
 | `CLOUDFLARED_VERSION` | `2025.11.1` | Semver-like version published at `github.com/cloudflare/cloudflared/releases` | Pin a different binary version when shared-brainstorm spawns `cloudflared` via the `cloudflared` npm wrapper. Ignored when `cloudflared` is already on PATH. |
 | `SHARED_BRAINSTORM_NO_CLIPBOARD` | unset | `1`, `true`, `yes`, `on` | Don't auto-copy the invite to your clipboard. The invite text is still printed. |
 | `SHARED_BRAINSTORM_NO_REDACT` | unset | `1`, `true`, `yes`, `on` | Disable best-effort question-text redaction. A loud one-line warning prints to stderr at server start when this is set. |
+| `SHARED_BRAINSTORM_NO_STREAM` | unset | `1`, `true`, `yes`, `on` | Globally disable the `streamPlanning` MCP tool. With this set the tool becomes a permanent soft no-op (returns `{ ok: true, streamed: false }`), no UI is shown, no `planning_stream` frames are broadcast, and the per-session buffer is never allocated — regardless of the coordinator's chosen audience. Use when planning narration must never leak to the web view (compliance, demos, secrets-heavy planning). |
 
 Malformed `*_RATE_LIMIT_*` and `SHARED_BRAINSTORM_BIND` values fall back to defaults with a stderr warning — the server never refuses to start because of a bad env-var value.
 

@@ -21,6 +21,12 @@ When the user runs `/shared-brainstorm` or asks to "brainstorm with the team":
 3. Use the chosen answer verbatim in your plan.
 4. Call `stop_session` when done.
 
+Optional — while planning, you may also push short narration lines to the team:
+
+- `stream_planning({ text: "<one concise sentence>" })` → `{ ok: true, streamed: true|false }`.
+- Audience (off/coordinator/everyone) is set by the coordinator from the web UI; default is off. While off, every call returns `streamed: false` — stop narrating until you next see `streamed: true`. One sentence per call (not verbose output / code). Text is redacted best-effort and never written to the transcript.
+- Globally disable with `SHARED_BRAINSTORM_NO_STREAM=1` (tool becomes a permanent soft no-op).
+
 If `start_session` fails, fall back to asking the user directly.
 
 MCP server config:
@@ -65,5 +71,6 @@ Tune behaviour via env vars in the MCP server's `env` block. Malformed values fa
 - `CLOUDFLARED_VERSION` (default `2025.11.1`) — pin the cloudflared binary version on the `npx -p cloudflared` fallback path. Ignored when system `cloudflared` is on PATH.
 - `SHARED_BRAINSTORM_NO_CLIPBOARD=1` — skip auto-copy of the invite text.
 - `SHARED_BRAINSTORM_NO_REDACT=1` — disable question-text redaction.
+- `SHARED_BRAINSTORM_NO_STREAM=1` — globally disable `stream_planning` (the tool becomes a permanent soft no-op; no UI, no broadcast, no buffer).
 
 Rate-limit format is `N/window` where `window ∈ {sec, min, hour}`. See the project `README.md` "Environment variables" section for the canonical reference.

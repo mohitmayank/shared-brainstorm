@@ -113,6 +113,30 @@ export const AdvisoriesSchema = z.object({
 });
 export type Advisories = z.infer<typeof AdvisoriesSchema>;
 
+// Planning-stream: coordinator-controlled audience for agent-pushed planning
+// narration. `off` is the default (feature dark); `coordinator` shows narration
+// only in the coordinator view; `everyone` also shows it to participants.
+export const StreamMode = z.enum(['off', 'coordinator', 'everyone']);
+export type StreamMode = z.infer<typeof StreamMode>;
+
+// One narration line. `text` is already redacted server-side before broadcast/seed.
+export const StreamEntrySchema = z.object({
+  text: z.string(),
+  at: z.string(),
+});
+export type StreamEntry = z.infer<typeof StreamEntrySchema>;
+
+// Per-audience planning-stream snapshot seeded into the `welcome` frame so a
+// fresh (no-replay) open shows recent narration. `recent` is only populated for
+// a viewer entitled to it (everyone, or coordinator while mode≠off) — the WS
+// layer computes this per connection; the line buffer never enters the
+// RingBuffer/`last_seq` replay path.
+export const StreamSeedSchema = z.object({
+  mode: StreamMode,
+  recent: z.array(StreamEntrySchema),
+});
+export type StreamSeed = z.infer<typeof StreamSeedSchema>;
+
 const Envelope = <P extends z.ZodTypeAny>(type: string, payload: P) =>
   z.object({
     seq: z.number().int().nonnegative(),
@@ -133,6 +157,9 @@ export const ServerEvent = z.discriminatedUnion('type', [
       // Active level-triggered advisories seeded for fresh (no-replay) opens;
       // absent for pre-advisory servers and when nothing is active.
       advisories: AdvisoriesSchema.optional(),
+      // Planning-stream seed for fresh opens, audience-filtered per connection;
+      // omitted when the feature is off or the viewer is not entitled.
+      stream: StreamSeedSchema.optional(),
     }),
   ),
   Envelope('participant_joined', z.object({ participant: ParticipantSchema })),
@@ -187,6 +214,10 @@ export const ServerEvent = z.discriminatedUnion('type', [
       is_empty: z.boolean(),
     }),
   ),
+  // Planning-stream: coordinator changed the narration audience. The mode itself
+  // is non-sensitive, so this is a normal replayable ServerEvent (enters the
+  // RingBuffer); only the narration lines (`planning_stream`) are audience-gated.
+  Envelope('stream_mode_changed', z.object({ mode: StreamMode })),
 ]);
 export type ServerEvent = z.infer<typeof ServerEvent>;
 
@@ -201,6 +232,8 @@ export const EphemeralFrame = z.discriminatedUnion('type', [
       public_url: z.string().url().optional(),
       // Active level-triggered advisories seeded for fresh (no-replay) opens.
       advisories: AdvisoriesSchema.optional(),
+      // Planning-stream seed, audience-filtered per connection.
+      stream: StreamSeedSchema.optional(),
     }),
   }),
   z.object({ type: z.literal('heartbeat') }),
@@ -211,6 +244,15 @@ export const EphemeralFrame = z.discriminatedUnion('type', [
       actor_id: z.string().optional(),
       activity: z.enum(['typing', 'picking', 'idle']),
     }),
+  }),
+  // Planning-stream narration line. Ephemeral (no seq, never replayed). `audience`
+  // is self-describing so the WS broadcast filter stays pure: a frame reaches a
+  // sub iff audience==='everyone' OR the sub is the coordinator. `off` never
+  // produces a frame (pushes are dropped server-side).
+  z.object({
+    type: z.literal('planning_stream'),
+    payload: StreamEntrySchema,
+    audience: z.enum(['coordinator', 'everyone']),
   }),
 ]);
 export type EphemeralFrame = z.infer<typeof EphemeralFrame>;

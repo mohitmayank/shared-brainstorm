@@ -14,12 +14,14 @@ import {
   StopSessionOutput,
   AnswerClarificationInput,
   AnswerClarificationOutput,
+  StreamPlanningInput,
+  StreamPlanningOutput,
 } from '@shared-brainstorm/shared';
 import type { QuestionId, ServerEvent } from '@shared-brainstorm/shared';
 import { SessionManager } from '../session/SessionManager.js';
 import { realClock } from '../session/clock.js';
 import { startHttpServer } from '../http/index.js';
-import { redactQuestion } from '../redact/redact.js';
+import { redactQuestion, redactStreamLine } from '../redact/redact.js';
 import type {
   Transport,
   TransportErrorReason,
@@ -466,6 +468,28 @@ export function answerClarification(raw: unknown): AnswerClarificationOutput {
     answer_text: input.text,
   });
   return AnswerClarificationOutput.parse({ ok: true });
+}
+
+// ---------------------------------------------------------------------------
+// streamPlanning (planning-stream)
+// ---------------------------------------------------------------------------
+
+/**
+ * 7th MCP tool: the agent pushes a concise line of planning narration. Unlike the
+ * other tools this is a SOFT no-op rather than a throw when there is nothing to do —
+ * the feature is globally disabled (`SHARED_BRAINSTORM_NO_STREAM`) or there is no
+ * active session — so the agent can narrate speculatively and back off cheaply on
+ * `streamed:false`. Text is redacted at this boundary (mirroring askGroup) before it
+ * reaches the manager; the manager drops it again when the audience mode is `off`.
+ * Only schema-invalid input throws.
+ */
+export function streamPlanning(raw: unknown): StreamPlanningOutput {
+  const input = StreamPlanningInput.parse(raw);
+  if (isTruthyEnv(process.env['SHARED_BRAINSTORM_NO_STREAM']) || !mcpState.manager) {
+    return StreamPlanningOutput.parse({ ok: true, streamed: false });
+  }
+  const { streamed } = mcpState.manager.pushStream(redactStreamLine(input.text));
+  return StreamPlanningOutput.parse({ ok: true, streamed });
 }
 
 // ---------------------------------------------------------------------------

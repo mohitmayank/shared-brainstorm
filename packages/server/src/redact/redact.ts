@@ -121,6 +121,15 @@ export function redactText(input: string): string {
   return out;
 }
 
+/**
+ * Planning-stream: scrub a single narration line before it is buffered/broadcast.
+ * Mirrors the `SHARED_BRAINSTORM_NO_REDACT` opt-out used by {@link redactQuestion}
+ * so the kill-switch behaves identically for both surfaces.
+ */
+export function redactStreamLine(text: string): string {
+  return REDACTION_DISABLED ? text : redactText(text);
+}
+
 export function redactQuestion(q: AskGroupInput): AskGroupInput {
   if (REDACTION_DISABLED) {
     const out: AskGroupInput = { question: q.question };

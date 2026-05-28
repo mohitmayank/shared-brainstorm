@@ -176,3 +176,18 @@ export const StopSessionOutput = z.object({
   transcript_path: z.string(),
 });
 export type StopSessionOutput = z.infer<typeof StopSessionOutput>;
+
+// Planning-stream: the agent pushes a concise line of planning narration. Text is
+// redacted server-side before any broadcast/seed. `streamed:false` tells the agent
+// the line was dropped (feature off via SHARED_BRAINSTORM_NO_STREAM, mode 'off', or
+// no active session) so it can stop narrating cheaply.
+export const StreamPlanningInput = z.object({
+  text: z.string().min(1).max(4000),
+});
+export type StreamPlanningInput = z.infer<typeof StreamPlanningInput>;
+
+export const StreamPlanningOutput = z.object({
+  ok: z.literal(true),
+  streamed: z.boolean(),
+});
+export type StreamPlanningOutput = z.infer<typeof StreamPlanningOutput>;

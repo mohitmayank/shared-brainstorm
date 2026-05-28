@@ -931,3 +931,30 @@ describe('HTTP API', () => {
     });
   });
 });
+
+describe('http — POST /api/coordinator/stream (planning-stream)', () => {
+  it('200 and sets the stream mode with a valid coordinator cookie', async () => {
+    const { app, mgr } = setup();
+    const cookie = await coordinatorCookie(app, mgr);
+    const res = await app.request('/api/coordinator/stream', json({ mode: 'everyone' }, cookie));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+    expect(mgr.getStreamMode()).toBe('everyone');
+  });
+
+  it('401 without an sb_c cookie; mode unchanged', async () => {
+    const { app, mgr } = setup();
+    const res = await app.request('/api/coordinator/stream', json({ mode: 'coordinator' }));
+    expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: 'not_coordinator' });
+    expect(mgr.getStreamMode()).toBe('off');
+  });
+
+  it('400 on an invalid mode', async () => {
+    const { app, mgr } = setup();
+    const cookie = await coordinatorCookie(app, mgr);
+    const res = await app.request('/api/coordinator/stream', json({ mode: 'public' }, cookie));
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid' });
+  });
+});

@@ -1,5 +1,11 @@
 # Changelog
 
+## [3.3.0](https://github.com/mohitmayank/shared-brainstorm/compare/v3.2.0...v3.3.0) (2026-05-28)
+
+### Features
+
+* **stream:** planning-stream MCP tool with coordinator-gated audience + pending-join dialog ([f1a6668](https://github.com/mohitmayank/shared-brainstorm/commit/f1a6668e1a58bc9d2bbce8425182f81ad997d13a))
+
 ## [3.2.0](https://github.com/mohitmayank/shared-brainstorm/compare/v3.1.1...v3.2.0) (2026-05-26)
 
 ### Features
